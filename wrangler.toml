@@ -1,0 +1,13 @@
+name = "reminder-bot"
+main = "src/index.ts"
+compatibility_date = "2025-03-25"
+
+[triggers]
+crons = ["*/5 * * * *"]
+
+[[kv_namespaces]]
+binding = "REMINDER_KV"
+id = "fd81048128444d2f95c87cd000e4f01d"
+
+[vars]
+TIMEZONE = "Asia/Shanghai"
