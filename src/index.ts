@@ -20,10 +20,52 @@ export default {
         setMyCommands(env.TG_BOT_TOKEN),
       ]);
 
-      return Response.json({
-        webhook: webhookOk ? "✅ set" : "❌ failed",
-        commands: commandsOk ? "✅ set" : "❌ failed",
-        webhookUrl,
+      const allOk = webhookOk && commandsOk;
+      const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reminder Bot Setup</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f0f; color: #e0e0e0; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+    .card { background: #1a1a1a; border-radius: 16px; padding: 40px; max-width: 480px; width: 90%; border: 1px solid #2a2a2a; }
+    .icon { font-size: 48px; margin-bottom: 16px; }
+    h1 { font-size: 22px; font-weight: 600; margin-bottom: 8px; color: #fff; }
+    .subtitle { color: #888; font-size: 14px; margin-bottom: 28px; }
+    .item { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid #222; }
+    .item:last-child { border-bottom: none; }
+    .item-label { font-size: 15px; color: #ccc; }
+    .badge { padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 500; }
+    .badge.ok { background: #0d2818; color: #4ade80; }
+    .badge.fail { background: #2d0a0a; color: #f87171; }
+    .url { margin-top: 20px; padding: 12px 16px; background: #111; border-radius: 8px; font-family: monospace; font-size: 13px; color: #888; word-break: break-all; }
+    .footer { margin-top: 24px; text-align: center; font-size: 13px; color: #555; }
+    .footer a { color: #60a5fa; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">${allOk ? "🎉" : "⚠️"}</div>
+    <h1>${allOk ? "Setup 完成！" : "Setup 部分失败"}</h1>
+    <p class="subtitle">${allOk ? "Bot 已准备就绪，可以开始使用了" : "请检查 TG_BOT_TOKEN 是否正确"}</p>
+    <div class="item">
+      <span class="item-label">Webhook 注册</span>
+      <span class="badge ${webhookOk ? "ok" : "fail"}">${webhookOk ? "✓ 成功" : "✗ 失败"}</span>
+    </div>
+    <div class="item">
+      <span class="item-label">指令菜单注册</span>
+      <span class="badge ${commandsOk ? "ok" : "fail"}">${commandsOk ? "✓ 成功" : "✗ 失败"}</span>
+    </div>
+    <div class="url">${webhookUrl}</div>
+    <div class="footer">打开 Telegram 搜索你的 Bot → 发送 /start 开始</div>
+  </div>
+</body>
+</html>`;
+
+      return new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
       });
     }
 

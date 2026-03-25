@@ -2,6 +2,8 @@
 
 基于 Cloudflare Worker 的 Telegram 每日定时提醒机器人。通过 Cron Trigger 定时检查，在预设的时间点向所有已激活用户发送提醒消息。
 
+👉 **立即体验：** [@aouos_reminder_bot](https://t.me/aouos_reminder_bot)
+
 ## 功能
 
 - ⏰ 每日固定时间自动发送提醒（默认 25 个时间点，覆盖 7:30-22:30）
