@@ -4,6 +4,7 @@ export interface Env {
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
   AI_SOUL?: string;
+  MINI_APP_URL?: string;
   DB: D1Database;
 }
 
@@ -71,4 +72,9 @@ export interface InlineKeyboardButton {
   text: string;
   callback_data?: string;
   url?: string;
+  web_app?: TelegramWebAppInfo;
+}
+
+export interface TelegramWebAppInfo {
+  url: string;
 }

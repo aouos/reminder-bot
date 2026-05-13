@@ -23,6 +23,20 @@ export interface StickerCandidate {
   weight: number;
 }
 
+export interface ChatIdentity {
+  id: number;
+  type?: string;
+  username?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  title?: string | null;
+}
+
+export interface StickerSceneCount {
+  scene: string;
+  count: number;
+}
+
 interface ChatStatusRow {
   active: number;
   started_at: string | null;
@@ -68,6 +82,11 @@ interface StickerAssetRow {
   id: string;
 }
 
+interface StickerSceneCountRow {
+  scene: string;
+  count: number;
+}
+
 export interface StickerAssetInput {
   id: string;
   fileId: string;
@@ -78,61 +97,49 @@ export interface StickerAssetInput {
 }
 
 export async function activateChat(env: Env, message: TelegramMessage): Promise<void> {
-  const now = new Date().toISOString();
-  await env.DB.prepare(`
-    INSERT INTO chats (
-      chat_id, chat_type, title, username, first_name, last_name,
-      active, started_at, stopped_at, created_at, updated_at
-    )
-    VALUES (?, ?, ?, ?, ?, ?, 1, ?, NULL, ?, ?)
-    ON CONFLICT(chat_id) DO UPDATE SET
-      chat_type = excluded.chat_type,
-      title = excluded.title,
-      username = excluded.username,
-      first_name = excluded.first_name,
-      last_name = excluded.last_name,
-      active = 1,
-      started_at = COALESCE(chats.started_at, excluded.started_at),
-      stopped_at = NULL,
-      updated_at = excluded.updated_at
-  `).bind(
-    message.chat.id,
-    message.chat.type,
-    message.chat.title ?? null,
-    message.chat.username ?? message.from?.username ?? null,
-    message.chat.first_name ?? message.from?.first_name ?? null,
-    message.chat.last_name ?? message.from?.last_name ?? null,
-    now,
-    now,
-    now,
-  ).run();
+  await setChatActive(env, chatIdentityFromMessage(message), true);
 }
 
 export async function deactivateChat(env: Env, message: TelegramMessage): Promise<void> {
+  await setChatActive(env, chatIdentityFromMessage(message), false);
+}
+
+export async function setChatActive(
+  env: Env,
+  chat: ChatIdentity,
+  active: boolean,
+): Promise<void> {
   const now = new Date().toISOString();
+  const stoppedAt = active ? null : now;
   await env.DB.prepare(`
     INSERT INTO chats (
       chat_id, chat_type, title, username, first_name, last_name,
       active, started_at, stopped_at, created_at, updated_at
     )
-    VALUES (?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(chat_id) DO UPDATE SET
       chat_type = excluded.chat_type,
       title = excluded.title,
       username = excluded.username,
       first_name = excluded.first_name,
       last_name = excluded.last_name,
-      active = 0,
+      active = excluded.active,
+      started_at = CASE
+        WHEN excluded.active = 1 THEN COALESCE(chats.started_at, excluded.started_at)
+        ELSE chats.started_at
+      END,
       stopped_at = excluded.stopped_at,
       updated_at = excluded.updated_at
   `).bind(
-    message.chat.id,
-    message.chat.type,
-    message.chat.title ?? null,
-    message.chat.username ?? message.from?.username ?? null,
-    message.chat.first_name ?? message.from?.first_name ?? null,
-    message.chat.last_name ?? message.from?.last_name ?? null,
-    now,
+    chat.id,
+    chat.type ?? "private",
+    chat.title ?? null,
+    chat.username ?? null,
+    chat.firstName ?? null,
+    chat.lastName ?? null,
+    active ? 1 : 0,
+    active ? now : null,
+    stoppedAt,
     now,
     now,
   ).run();
@@ -241,6 +248,18 @@ export async function getReminderFeedbackForDate(
   `).bind(chatId, reminderDate).all<FeedbackStatusRow>();
 
   return new Map(results.map((row) => [row.reminder_time, row.action]));
+}
+
+export async function getStickerSceneCounts(env: Env): Promise<Map<string, number>> {
+  const { results } = await env.DB.prepare(`
+    SELECT m.scene, COUNT(*) AS count
+    FROM sticker_mappings m
+    JOIN sticker_assets a ON a.id = m.sticker_id
+    WHERE m.enabled = 1 AND a.enabled = 1
+    GROUP BY m.scene
+  `).all<StickerSceneCountRow>();
+
+  return new Map(results.map((row) => [row.scene, row.count]));
 }
 
 export async function createSnooze(
@@ -463,4 +482,15 @@ function nextDate(date: string): string {
   const next = new Date(`${date}T00:00:00.000Z`);
   next.setUTCDate(next.getUTCDate() + 1);
   return next.toISOString().slice(0, 10);
+}
+
+function chatIdentityFromMessage(message: TelegramMessage): ChatIdentity {
+  return {
+    id: message.chat.id,
+    type: message.chat.type,
+    title: message.chat.title ?? null,
+    username: message.chat.username ?? message.from?.username ?? null,
+    firstName: message.chat.first_name ?? message.from?.first_name ?? null,
+    lastName: message.chat.last_name ?? message.from?.last_name ?? null,
+  };
 }

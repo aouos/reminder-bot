@@ -121,10 +121,24 @@ export async function setMyCommands(token: string): Promise<boolean> {
     { command: "test", description: "测试一条 Anya 提醒" },
     { command: "list", description: "查看今日提醒时间表" },
     { command: "status", description: "查看阿尼亚值班状态" },
-    { command: "help", description: "查看可用指令" },
+    { command: "app", description: "打开 Mini App 控制台" },
   ];
 
   const result = await telegramRequest<true>(token, "setMyCommands", { commands });
+  return result.ok;
+}
+
+export async function setChatMenuButton(
+  token: string,
+  webAppUrl: string,
+): Promise<boolean> {
+  const result = await telegramRequest<true>(token, "setChatMenuButton", {
+    menu_button: {
+      type: "web_app",
+      text: "控制台",
+      web_app: { url: webAppUrl },
+    },
+  });
   return result.ok;
 }
 

@@ -4,10 +4,12 @@ import {
   editMessageReplyMarkup,
   sendChatAction,
   sendMessage,
+  setChatMenuButton,
   setWebhook,
   setMyCommands,
 } from "./telegram";
 import { handleCommand } from "./commands";
+import { handleMiniAppRequest } from "./miniapp";
 import { timeline } from "./timeline";
 import { generateReminderMessage } from "./ai";
 import { sendStickerForScene } from "./stickers";
@@ -44,15 +46,21 @@ export default {
       return handleWebhook(request, env, ctx);
     }
 
+    if (url.pathname === "/app" || url.pathname.startsWith("/api/app/")) {
+      return handleMiniAppRequest(request, env);
+    }
+
     // GET /setup - Register webhook and bot commands
     if (url.pathname === "/setup") {
       const webhookUrl = `${url.origin}/webhook`;
-      const [webhookOk, commandsOk] = await Promise.all([
+      const miniAppUrl = `${url.origin}/app`;
+      const [webhookOk, commandsOk, menuOk] = await Promise.all([
         setWebhook(env.TG_BOT_TOKEN, webhookUrl),
         setMyCommands(env.TG_BOT_TOKEN),
+        setChatMenuButton(env.TG_BOT_TOKEN, miniAppUrl),
       ]);
 
-      const allOk = webhookOk && commandsOk;
+      const allOk = webhookOk && commandsOk && menuOk;
       const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -90,7 +98,12 @@ export default {
       <span class="item-label">指令菜单注册</span>
       <span class="badge ${commandsOk ? "ok" : "fail"}">${commandsOk ? "✓ 成功" : "✗ 失败"}</span>
     </div>
+    <div class="item">
+      <span class="item-label">Mini App 菜单</span>
+      <span class="badge ${menuOk ? "ok" : "fail"}">${menuOk ? "✓ 成功" : "✗ 失败"}</span>
+    </div>
     <div class="url">${webhookUrl}</div>
+    <div class="url">${miniAppUrl}</div>
     <div class="footer">打开 Telegram 搜索你的 Bot → 发送 /start 开始</div>
   </div>
 </body>
@@ -107,6 +120,8 @@ export default {
       name: "reminder-bot",
       time: new Date().toLocaleString("zh-CN", { timeZone: env.TIMEZONE }),
       endpoints: {
+        "/app": "Telegram Mini App dashboard",
+        "/api/app/summary": "Mini App summary API",
         "/setup": "Register Telegram webhook and bot commands",
         "/webhook": "Telegram webhook (POST)",
       },
@@ -189,13 +204,14 @@ async function handleWebhook(
 ): Promise<Response> {
   try {
     const update: TelegramUpdate = await request.json();
+    const appUrl = env.MINI_APP_URL || `${new URL(request.url).origin}/app`;
 
     if (update.callback_query) {
       return handleCallbackQuery(update.callback_query, env, ctx);
     }
 
     if (update.message?.text?.startsWith("/")) {
-      return handleCommand(update.message, env);
+      return handleCommand(update.message, env, appUrl);
     }
 
     if (update.message?.sticker) {

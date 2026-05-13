@@ -19,19 +19,18 @@ import { sendStickerForScene } from "./stickers";
 const HELP_TEXT = [
   "✅ <b>阿尼亚开始值班！</b>",
   "",
-  "bolt特工，阿尼亚会按时间提醒你。",
+  "bolt特工，阿尼亚会按时间提醒你。输入框旁边的「控制台」可以查看今日进度和设置提醒。",
   "",
-  "<b>可用指令：</b>",
-  "· /list — 今日时间表",
-  "· /status — 查看状态",
-  "· /test — 测试一条 Anya 提醒",
-  "· /help — 查看可用指令",
-  "· /stop — 关闭提醒",
+  "<b>常用指令：</b>",
+  "· /app — 打开控制台",
+  "· /test — 测试提醒",
+  "· /stop — 暂停提醒",
 ].join("\n");
 
 export async function handleCommand(
   message: TelegramMessage,
   env: Env,
+  appUrl?: string,
 ): Promise<Response> {
   const chatId = message.chat.id;
   const text = message.text?.trim() ?? "";
@@ -44,12 +43,12 @@ export async function handleCommand(
       return handleStop(message, env);
     case "/test":
       return handleTest(chatId, env);
+    case "/app":
+      return handleApp(chatId, env, appUrl);
     case "/list":
       return handleList(chatId, env);
     case "/status":
       return handleStatus(chatId, env);
-    case "/help":
-      return handleHelp(chatId, env);
     default:
       return handleUnknownCommand(chatId, env);
   }
@@ -78,6 +77,11 @@ async function handleStop(message: TelegramMessage, env: Env): Promise<Response>
 }
 
 async function handleTest(chatId: number, env: Env): Promise<Response> {
+  await sendTestReminder(chatId, env);
+  return new Response("OK");
+}
+
+export async function sendTestReminder(chatId: number, env: Env): Promise<void> {
   const now = new Date();
   const localNow = new Date(now.toLocaleString("en-US", { timeZone: env.TIMEZONE }));
   const currentMinutes = localNow.getHours() * 60 + localNow.getMinutes();
@@ -86,7 +90,7 @@ async function handleTest(chatId: number, env: Env): Promise<Response> {
 
   if (!item) {
     await sendMessage(env.TG_BOT_TOKEN, chatId, "嘎ーん 😱 阿尼亚没有找到提醒时间表。");
-    return new Response("OK");
+    return;
   }
 
   await sendChatAction(env.TG_BOT_TOKEN, chatId);
@@ -101,8 +105,6 @@ async function handleTest(chatId: number, env: Env): Promise<Response> {
     parseMode: isGenerated ? null : "HTML",
     replyMarkup: buildTestReminderKeyboard(reminderDate, reminderTime),
   });
-
-  return new Response("OK");
 }
 
 async function handleList(chatId: number, env: Env): Promise<Response> {
@@ -175,8 +177,24 @@ async function handleStatus(chatId: number, env: Env): Promise<Response> {
   return new Response("OK");
 }
 
-async function handleHelp(chatId: number, env: Env): Promise<Response> {
-  await sendMessage(env.TG_BOT_TOKEN, chatId, HELP_TEXT);
+async function handleApp(chatId: number, env: Env, appUrl?: string): Promise<Response> {
+  const miniAppUrl = appUrl || env.MINI_APP_URL;
+  if (!miniAppUrl) {
+    await sendMessage(
+      env.TG_BOT_TOKEN,
+      chatId,
+      "控制台还没配置地址。bolt特工先访问 /setup，让 Telegram 菜单按钮指向当前 Worker。",
+    );
+    return new Response("OK");
+  }
+
+  await sendMessage(env.TG_BOT_TOKEN, chatId, "打开阿尼亚提醒控制台：", {
+    replyMarkup: {
+      inline_keyboard: [[
+        { text: "打开控制台", web_app: { url: miniAppUrl } },
+      ]],
+    },
+  });
   return new Response("OK");
 }
 
@@ -184,7 +202,7 @@ async function handleUnknownCommand(chatId: number, env: Env): Promise<Response>
   await sendMessage(
     env.TG_BOT_TOKEN,
     chatId,
-    "嘎ーん 😱 阿尼亚没看懂这个指令。发送 /help 看看可以做什么。",
+    "嘎ーん 😱 阿尼亚没看懂这个指令。点输入框旁边的「控制台」，或者发送 /app。",
   );
   return new Response("OK");
 }
