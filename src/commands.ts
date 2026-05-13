@@ -1,6 +1,33 @@
 import type { Env, TelegramMessage } from "./types";
-import { sendMessage } from "./telegram";
+import { sendChatAction, sendMessage } from "./telegram";
 import { timeline } from "./timeline";
+import {
+  activateChat,
+  deactivateChat,
+  getChatStatus,
+  getReminderFeedbackForDate,
+} from "./db";
+import { generateReminderMessage } from "./ai";
+import {
+  buildTestReminderKeyboard,
+  formatReminderTime,
+  getLocalDate,
+  getReminderScene,
+} from "./interactions";
+import { sendStickerForScene } from "./stickers";
+
+const HELP_TEXT = [
+  "✅ <b>阿尼亚开始值班！</b>",
+  "",
+  "bolt特工，阿尼亚会按时间提醒你。",
+  "",
+  "<b>可用指令：</b>",
+  "· /list — 今日时间表",
+  "· /status — 查看状态",
+  "· /test — 测试一条 Anya 提醒",
+  "· /help — 查看可用指令",
+  "· /stop — 关闭提醒",
+].join("\n");
 
 export async function handleCommand(
   message: TelegramMessage,
@@ -12,45 +39,39 @@ export async function handleCommand(
 
   switch (command) {
     case "/start":
-      return handleStart(chatId, env);
+      return handleStart(message, env);
     case "/stop":
-      return handleStop(chatId, env);
+      return handleStop(message, env);
     case "/test":
       return handleTest(chatId, env);
     case "/list":
       return handleList(chatId, env);
     case "/status":
       return handleStatus(chatId, env);
+    case "/help":
+      return handleHelp(chatId, env);
     default:
-      return new Response("OK");
+      return handleUnknownCommand(chatId, env);
   }
 }
 
-async function handleStart(chatId: number, env: Env): Promise<Response> {
-  await env.REMINDER_KV.put(`chat:${chatId}`, JSON.stringify({
-    active: true,
-    startedAt: new Date().toISOString(),
-  }));
+async function handleStart(message: TelegramMessage, env: Env): Promise<Response> {
+  const chatId = message.chat.id;
+  await activateChat(env, message);
 
-  await sendMessage(
-    env.TG_BOT_TOKEN,
-    chatId,
-    "✅ <b>提醒已开启！</b>\n\n我会在每天的固定时间给你发送提醒消息。\n\n<b>可用指令：</b>\n· /list — 查看今日时间表\n· /status — 查看提醒状态\n· /test — 发送测试消息\n· /stop — 关闭提醒",
-  );
+  await sendMessage(env.TG_BOT_TOKEN, chatId, HELP_TEXT);
 
   return new Response("OK");
 }
 
-async function handleStop(chatId: number, env: Env): Promise<Response> {
-  await env.REMINDER_KV.put(`chat:${chatId}`, JSON.stringify({
-    active: false,
-    stoppedAt: new Date().toISOString(),
-  }));
+async function handleStop(message: TelegramMessage, env: Env): Promise<Response> {
+  const chatId = message.chat.id;
+  await deactivateChat(env, message);
 
   await sendMessage(
     env.TG_BOT_TOKEN,
     chatId,
-    "⏸️ <b>提醒已关闭。</b>\n\n使用 /start 重新开启。",
+    "⏸️ <b>阿尼亚先收工。</b>\n\nbolt特工要重新开启的话，发送 /start。",
   );
 
   return new Response("OK");
@@ -60,17 +81,26 @@ async function handleTest(chatId: number, env: Env): Promise<Response> {
   const now = new Date();
   const localNow = new Date(now.toLocaleString("en-US", { timeZone: env.TIMEZONE }));
   const currentMinutes = localNow.getHours() * 60 + localNow.getMinutes();
-  const next = timeline.find((item) => item.hour * 60 + item.minute > currentMinutes);
-  const nextInfo = next
-    ? `\n\n⏭️ 下一条提醒: <code>${String(next.hour).padStart(2, "0")}:${String(next.minute).padStart(2, "0")}</code>`
-    : "\n\n✅ 今天的提醒已全部发完";
+  const item = timeline.find((entry) => entry.hour * 60 + entry.minute > currentMinutes)
+    ?? timeline[0];
 
-  await sendMessage(
-    env.TG_BOT_TOKEN,
-    chatId,
-    "🔔 <b>测试消息</b>\n\n如果你收到了这条消息，说明 Bot 工作正常！\n\n⏰ 当前时间: " +
-      now.toLocaleString("zh-CN", { timeZone: env.TIMEZONE }) + nextInfo,
-  );
+  if (!item) {
+    await sendMessage(env.TG_BOT_TOKEN, chatId, "嘎ーん 😱 阿尼亚没有找到提醒时间表。");
+    return new Response("OK");
+  }
+
+  await sendChatAction(env.TG_BOT_TOKEN, chatId);
+
+  const reminderDate = getLocalDate(now, env.TIMEZONE);
+  const reminderTime = formatReminderTime(item);
+  const generated = await generateReminderMessage({ env, item, now });
+  const isGenerated = generated !== item.message;
+
+  await sendStickerForScene(env, chatId, getReminderScene(item, generated));
+  await sendMessage(env.TG_BOT_TOKEN, chatId, generated, {
+    parseMode: isGenerated ? null : "HTML",
+    replyMarkup: buildTestReminderKeyboard(reminderDate, reminderTime),
+  });
 
   return new Response("OK");
 }
@@ -80,18 +110,26 @@ async function handleList(chatId: number, env: Env): Promise<Response> {
   const currentTime = new Date(
     now.toLocaleString("en-US", { timeZone: env.TIMEZONE }),
   );
+  const reminderDate = getLocalDate(now, env.TIMEZONE);
+  const feedback = await getReminderFeedbackForDate(env, chatId, reminderDate);
   const currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
 
   const totalCount = timeline.length;
-  const doneCount = timeline.filter((item) => item.hour * 60 + item.minute <= currentMinutes).length;
+  const doneCount = [...feedback.values()].filter((action) => action === "done").length;
+  const skipCount = [...feedback.values()].filter((action) => action === "skip").length;
+  const snoozeCount = [...feedback.values()].filter((action) => action === "snooze").length;
 
-  let msg = `📋 <b>今日提醒时间表</b>（${doneCount}/${totalCount}）\n\n`;
+  let msg = `📋 <b>今日提醒时间表</b>（完成 ${doneCount}/${totalCount}）\n`;
+  if (skipCount > 0 || snoozeCount > 0) {
+    msg += `⏭️ 跳过 ${skipCount} · 💤 延后 ${snoozeCount}\n`;
+  }
+  msg += "\n";
+
   for (const item of timeline) {
     const itemMinutes = item.hour * 60 + item.minute;
     const timeStr = `${String(item.hour).padStart(2, "0")}:${String(item.minute).padStart(2, "0")}`;
-    const isPast = itemMinutes <= currentMinutes;
-    const indicator = isPast ? "✅" : "⏳";
-    // 只显示消息的第一行（标题部分）
+    const action = feedback.get(timeStr);
+    const indicator = getListIndicator(action, itemMinutes <= currentMinutes);
     const title = item.message.split("\n")[0].replace(/<[^>]*>/g, "");
     msg += `${indicator} <code>${timeStr}</code>  ${title}\n`;
   }
@@ -102,23 +140,51 @@ async function handleList(chatId: number, env: Env): Promise<Response> {
   return new Response("OK");
 }
 
+function getListIndicator(action: string | undefined, isPast: boolean): string {
+  switch (action) {
+    case "done":
+      return "✅";
+    case "skip":
+      return "⏭️";
+    case "snooze":
+      return "💤";
+    default:
+      return isPast ? "▫️" : "⏳";
+  }
+}
+
 async function handleStatus(chatId: number, env: Env): Promise<Response> {
-  const data = await env.REMINDER_KV.get(`chat:${chatId}`);
+  const state = await getChatStatus(env, chatId);
 
   let msg: string;
-  if (!data) {
-    msg = "ℹ️ 你还没有开启过提醒。\n\n使用 /start 开启每日提醒。";
+  if (!state) {
+    msg = "ℹ️ 阿尼亚还没开始值班。\n\nbolt特工发送 /start 就可以开启提醒。";
+  } else if (state.active) {
+    const startTime = state.startedAt
+      ? new Date(state.startedAt).toLocaleString("zh-CN", { timeZone: env.TIMEZONE })
+      : "未知";
+    msg = `🟢 <b>阿尼亚正在值班</b>\n\n📅 开启时间: ${startTime}\n⏰ 共 ${timeline.length} 个提醒时间点\n🔥 连续完成: ${state.streakDays} 天\n✅ 完成次数: ${state.totalDone}\n\n/list 可以看时间表。`;
   } else {
-    const state = JSON.parse(data);
-    if (state.active) {
-      const startTime = new Date(state.startedAt).toLocaleString("zh-CN", { timeZone: env.TIMEZONE });
-      msg = `🟢 <b>提醒状态: 已开启</b>\n\n📅 开启时间: ${startTime}\n⏰ 共 ${timeline.length} 个提醒时间点\n\n使用 /list 查看时间表`;
-    } else {
-      const stopTime = new Date(state.stoppedAt).toLocaleString("zh-CN", { timeZone: env.TIMEZONE });
-      msg = `🔴 <b>提醒状态: 已关闭</b>\n\n📅 关闭时间: ${stopTime}\n\n使用 /start 重新开启`;
-    }
+    const stopTime = state.stoppedAt
+      ? new Date(state.stoppedAt).toLocaleString("zh-CN", { timeZone: env.TIMEZONE })
+      : "未知";
+    msg = `🔴 <b>阿尼亚已经收工</b>\n\n📅 关闭时间: ${stopTime}\n🔥 连续完成: ${state.streakDays} 天\n✅ 完成次数: ${state.totalDone}\n\n/start 可以重新开启。`;
   }
 
   await sendMessage(env.TG_BOT_TOKEN, chatId, msg);
+  return new Response("OK");
+}
+
+async function handleHelp(chatId: number, env: Env): Promise<Response> {
+  await sendMessage(env.TG_BOT_TOKEN, chatId, HELP_TEXT);
+  return new Response("OK");
+}
+
+async function handleUnknownCommand(chatId: number, env: Env): Promise<Response> {
+  await sendMessage(
+    env.TG_BOT_TOKEN,
+    chatId,
+    "嘎ーん 😱 阿尼亚没看懂这个指令。发送 /help 看看可以做什么。",
+  );
   return new Response("OK");
 }

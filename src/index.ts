@@ -1,15 +1,47 @@
-import type { Env, TelegramUpdate } from "./types";
-import { sendMessage, setWebhook, setMyCommands } from "./telegram";
+import type { Env, InlineKeyboardMarkup, TelegramUpdate } from "./types";
+import {
+  answerCallbackQuery,
+  editMessageReplyMarkup,
+  sendChatAction,
+  sendMessage,
+  setWebhook,
+  setMyCommands,
+} from "./telegram";
 import { handleCommand } from "./commands";
 import { timeline } from "./timeline";
+import { generateReminderMessage } from "./ai";
+import { sendStickerForScene } from "./stickers";
+import {
+  createSnooze,
+  getActiveChatIds,
+  getDueSnoozes,
+  mapStickerToScene,
+  markSnoozeSent,
+  recordFeedback,
+  upsertStickerAsset,
+} from "./db";
+import {
+  buildReminderKeyboard,
+  buildStickerSceneKeyboard,
+  buildTestReminderKeyboard,
+  formatReminderTime,
+  getLocalDate,
+  getReminderScene,
+  parseReminderCallbackData,
+  parseStickerSceneCallbackData,
+  STICKER_SCENES,
+} from "./interactions";
+
+const REMINDER_SNOOZE_DELAY_MS = 10 * 60 * 1000;
+const TEST_SNOOZE_DELAY_MS = 10 * 1000;
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     // POST /webhook - Telegram webhook endpoint
     if (request.method === "POST" && url.pathname === "/webhook") {
-      return handleWebhook(request, env);
+      return handleWebhook(request, env, ctx);
     }
 
     // GET /setup - Register webhook and bot commands
@@ -82,44 +114,92 @@ export default {
   },
 
   async scheduled(
-    controller: ScheduledController,
+    _controller: ScheduledController,
     env: Env,
   ): Promise<void> {
     const now = new Date();
+    await sendDueSnoozes(env, now);
+
     const localTime = new Date(
       now.toLocaleString("en-US", { timeZone: env.TIMEZONE }),
     );
     const currentHour = localTime.getHours();
     const currentMinute = localTime.getMinutes();
 
-    // Find matching timeline item
     const matched = timeline.find(
       (item) => item.hour === currentHour && item.minute === currentMinute,
     );
 
     if (!matched) return;
 
-    // Get all active chats from KV
     const chatIds = await getActiveChatIds(env);
+    if (chatIds.length === 0) return;
 
-    // Send message to all active chats
     await Promise.allSettled(
-      chatIds.map((chatId) =>
-        sendMessage(env.TG_BOT_TOKEN, chatId, matched.message),
-      ),
+      chatIds.map((chatId) => sendChatAction(env.TG_BOT_TOKEN, chatId)),
+    );
+
+    const message = await generateReminderMessage({ env, item: matched, now });
+    const isGenerated = message !== matched.message;
+    const reminderDate = getLocalDate(now, env.TIMEZONE);
+    const reminderTime = formatReminderTime(matched);
+    const replyMarkup = buildReminderKeyboard(reminderDate, reminderTime);
+    const scene = getReminderScene(matched, message);
+
+    await Promise.allSettled(
+      chatIds.map(async (chatId) => {
+        await sendStickerForScene(env, chatId, scene);
+        return sendReminderMessage(
+          env.TG_BOT_TOKEN,
+          chatId,
+          message,
+          matched.message,
+          isGenerated,
+          replyMarkup,
+        );
+      }),
     );
   },
 };
 
+async function sendReminderMessage(
+  token: string,
+  chatId: number,
+  message: string,
+  fallbackMessage: string,
+  isGenerated: boolean,
+  replyMarkup: InlineKeyboardMarkup,
+): Promise<boolean> {
+  const ok = await sendMessage(token, chatId, message, {
+    parseMode: isGenerated ? null : "HTML",
+    replyMarkup,
+  });
+  if (ok || !isGenerated) return ok;
+
+  return sendMessage(token, chatId, fallbackMessage, {
+    parseMode: "HTML",
+    replyMarkup,
+  });
+}
+
 async function handleWebhook(
   request: Request,
   env: Env,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   try {
     const update: TelegramUpdate = await request.json();
 
+    if (update.callback_query) {
+      return handleCallbackQuery(update.callback_query, env, ctx);
+    }
+
     if (update.message?.text?.startsWith("/")) {
       return handleCommand(update.message, env);
+    }
+
+    if (update.message?.sticker) {
+      return handleStickerMessage(update.message, env);
     }
 
     return new Response("OK");
@@ -128,20 +208,227 @@ async function handleWebhook(
   }
 }
 
-async function getActiveChatIds(env: Env): Promise<number[]> {
-  const list = await env.REMINDER_KV.list({ prefix: "chat:" });
-  const chatIds: number[] = [];
+async function handleCallbackQuery(
+  query: NonNullable<TelegramUpdate["callback_query"]>,
+  env: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
+  const stickerMapping = parseStickerSceneCallbackData(query.data);
+  if (stickerMapping) {
+    const label = STICKER_SCENES.find(({ scene }) => scene === stickerMapping.scene)?.label
+      ?? stickerMapping.scene;
 
-  for (const key of list.keys) {
-    const data = await env.REMINDER_KV.get(key.name);
-    if (data) {
-      const state = JSON.parse(data);
-      if (state.active) {
-        const chatId = Number(key.name.replace("chat:", ""));
-        if (!isNaN(chatId)) chatIds.push(chatId);
-      }
+    await mapStickerToScene(env, {
+      stickerId: stickerMapping.stickerId,
+      scene: stickerMapping.scene,
+    });
+
+    if (query.message) {
+      await editMessageReplyMarkup(
+        env.TG_BOT_TOKEN,
+        query.message.chat.id,
+        query.message.message_id,
+      );
     }
+
+    await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, `已用于${label}`);
+
+    return new Response("OK");
   }
 
-  return chatIds;
+  const parsed = parseReminderCallbackData(query.data);
+  if (!parsed) {
+    await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, "嘎ーん，这个按钮过期啦。");
+    return new Response("OK");
+  }
+
+  const chatId = query.message?.chat.id ?? query.from.id;
+  const messageId = query.message?.message_id;
+  const item = timeline.find((entry) => formatReminderTime(entry) === parsed.reminderTime);
+
+  if (parsed.kind === "test") {
+    return handleTestCallback(query, env, ctx, parsed, chatId, messageId, item);
+  }
+
+  if (parsed.action === "snooze") {
+    const dueAt = new Date(Date.now() + REMINDER_SNOOZE_DELAY_MS);
+    await createSnooze(env, {
+      chatId,
+      dueAt,
+      reminderDate: parsed.reminderDate,
+      reminderTime: parsed.reminderTime,
+      message: query.message?.text ?? item?.message ?? "该完成这条提醒啦。",
+    });
+
+    await recordFeedback(env, {
+      chatId,
+      reminderDate: parsed.reminderDate,
+      reminderTime: parsed.reminderTime,
+      action: parsed.action,
+      messageId,
+    });
+
+    if (messageId) {
+      await editMessageReplyMarkup(env.TG_BOT_TOKEN, chatId, messageId);
+    }
+
+    await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, "10 分钟后阿尼亚再来。");
+    return new Response("OK");
+  }
+
+  await recordFeedback(env, {
+    chatId,
+    reminderDate: parsed.reminderDate,
+    reminderTime: parsed.reminderTime,
+    action: parsed.action,
+    messageId,
+  });
+
+  if (messageId) {
+    await editMessageReplyMarkup(env.TG_BOT_TOKEN, chatId, messageId);
+  }
+
+  if (parsed.action === "done") {
+    await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, "完成已记录。");
+    return new Response("OK");
+  }
+
+  if (parsed.action === "skip") {
+    await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, "这次已跳过。");
+    return new Response("OK");
+  }
+
+  return new Response("OK");
+}
+
+async function handleTestCallback(
+  query: NonNullable<TelegramUpdate["callback_query"]>,
+  env: Env,
+  ctx: ExecutionContext,
+  parsed: NonNullable<ReturnType<typeof parseReminderCallbackData>>,
+  chatId: number,
+  messageId: number | undefined,
+  item: typeof timeline[number] | undefined,
+): Promise<Response> {
+  // Test callbacks exercise the button flow without touching feedback or stats.
+  if (messageId) {
+    await editMessageReplyMarkup(env.TG_BOT_TOKEN, chatId, messageId);
+  }
+
+  if (parsed.action === "snooze") {
+    const message = query.message?.text ?? item?.message ?? "该完成这条提醒啦。";
+    ctx.waitUntil(sendTestReminderAfterDelay(
+      env,
+      chatId,
+      message,
+      parsed.reminderDate,
+      parsed.reminderTime,
+      item,
+    ));
+    await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, "10 秒后阿尼亚再测试一次。");
+    return new Response("OK");
+  }
+
+  const text = parsed.action === "done"
+    ? "测试完成，不写入统计。"
+    : "测试跳过，不写入统计。";
+  await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, text);
+  return new Response("OK");
+}
+
+async function sendTestReminderAfterDelay(
+  env: Env,
+  chatId: number,
+  message: string,
+  reminderDate: string,
+  reminderTime: string,
+  item: typeof timeline[number] | undefined,
+): Promise<void> {
+  await delay(TEST_SNOOZE_DELAY_MS);
+  await sendStickerForScene(env, chatId, getReminderScene(item, message));
+  await sendMessage(env.TG_BOT_TOKEN, chatId, `⏰ 阿尼亚测试重发：\n\n${message}`, {
+    parseMode: null,
+    replyMarkup: buildTestReminderKeyboard(reminderDate, reminderTime),
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function sendDueSnoozes(env: Env, now: Date): Promise<void> {
+  const snoozes = await getDueSnoozes(env, now);
+
+  await Promise.allSettled(
+    snoozes.map(async (snooze) => {
+      await sendStickerForScene(env, snooze.chatId, getReminderScene(undefined, snooze.message));
+
+      const ok = await sendMessage(
+        env.TG_BOT_TOKEN,
+        snooze.chatId,
+        `⏰ 阿尼亚又来提醒啦：\n\n${snooze.message}`,
+        {
+          parseMode: null,
+          replyMarkup: buildReminderKeyboard(snooze.reminderDate, snooze.reminderTime),
+        },
+      );
+
+      if (ok) {
+        await markSnoozeSent(env, snooze.id);
+      }
+    }),
+  );
+}
+
+async function handleStickerMessage(
+  message: NonNullable<TelegramUpdate["message"]>,
+  env: Env,
+): Promise<Response> {
+  const sticker = message.sticker;
+  if (!sticker) return new Response("OK");
+
+  const stickerType = sticker.is_video
+    ? "video"
+    : sticker.is_animated
+      ? "animated"
+      : "static";
+  const label = sticker.emoji ? `${sticker.emoji} sticker` : "sticker";
+  const source = sticker.set_name ?? "unknown";
+  const stickerId = await upsertStickerAsset(env, {
+    id: crypto.randomUUID(),
+    fileId: sticker.file_id,
+    emoji: sticker.emoji ?? null,
+    label,
+    type: stickerType,
+    source,
+  });
+
+  await sendMessage(
+    env.TG_BOT_TOKEN,
+    message.chat.id,
+    [
+      "阿尼亚收到贴纸啦。",
+      `<code>${escapeHtml(sticker.file_id)}</code>`,
+      "",
+      `emoji: ${sticker.emoji ?? "无"}`,
+      `类型: ${stickerType}`,
+      `贴纸包: ${escapeHtml(source)}`,
+      "",
+      "bolt特工，点一下这个贴纸应该用于哪个场景。",
+    ].join("\n"),
+    {
+      parseMode: "HTML",
+      replyMarkup: buildStickerSceneKeyboard(stickerId),
+    },
+  );
+
+  return new Response("OK");
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
