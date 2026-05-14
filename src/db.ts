@@ -32,11 +32,6 @@ export interface ChatIdentity {
   title?: string | null;
 }
 
-export interface StickerSceneCount {
-  scene: string;
-  count: number;
-}
-
 interface ChatStatusRow {
   active: number;
   started_at: string | null;

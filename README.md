@@ -12,7 +12,7 @@
 - 💾 使用 Cloudflare D1 存储用户状态、反馈、连续完成天数和贴纸映射
 - 🧩 每条提醒支持「完成 / 跳过 / 10 分钟后」按钮，点击后自动隐藏按钮
 - 🖼️ 支持 typing 状态和场景贴纸：提醒发送时先发贴纸，再发 Anya 文案
-- 📱 内置 Telegram Mini App 控制台：查看今日进度、开关提醒、查看贴纸场景、发送测试提醒
+- 📊 支持命令查看今日统计和贴纸场景
 
 ### Bot 指令
 
@@ -23,7 +23,8 @@
 | `/test` | 发送测试消息，按钮不写入统计；测试延后为 10 秒 |
 | `/list` | 查看今日提醒时间表及完成进度 |
 | `/status` | 查看当前提醒状态 |
-| `/app` | 打开 Mini App 控制台 |
+| `/stats` | 查看今日完成、跳过、延后统计 |
+| `/stickers` | 查看贴纸场景覆盖情况 |
 
 ### 默认时间线
 
@@ -127,20 +128,11 @@ npm run deploy
 https://your-worker.your-subdomain.workers.dev/setup
 ```
 
-看到 setup 页面里 Webhook、指令菜单和 Mini App 菜单都显示成功即为完成。
+看到 setup 页面里 Webhook、指令菜单和菜单按钮恢复都显示成功即为完成。
 
 ### 8. 开始使用
 
 在 Telegram 中向你的 Bot 发送 `/start`，即可激活每日提醒。
-
-Mini App 控制台会出现在 Telegram 输入框旁边的菜单按钮里，也可以通过 `/app` 打开。
-
-如果你使用自定义域名，也可以显式配置 `MINI_APP_URL` 覆盖自动生成的地址：
-
-```toml
-[vars]
-MINI_APP_URL = "https://your-worker.your-subdomain.workers.dev/app"
-```
 
 > 如果你之前用 KV 版本部署过，切到 D1 后需要用户重新发送一次 `/start`，让 bot 在 D1 里创建 chat 记录。
 
@@ -178,17 +170,6 @@ export const timeline: TimelineItem[] = [
 把贴纸发送给 bot，bot 会自动写入 `sticker_assets`，然后回复一组场景按钮。点击场景按钮后，bot 会把这个贴纸映射到 `sticker_mappings`。
 
 支持的场景包括：`wake`、`water`、`move`、`meal`、`sleep`、`focus`、`default`。同一个场景可以映射多个贴纸，发送时会按 `weight` 随机选一个；默认按钮创建的映射权重是 `1`。
-
-### Mini App 控制台
-
-Mini App 路由内置在同一个 Worker：
-
-- `GET /app`：控制台页面
-- `GET /api/app/summary`：今日提醒、统计和贴纸场景
-- `POST /api/app/toggle`：开启或暂停提醒
-- `POST /api/app/test`：发送一条测试提醒
-
-这些 API 会校验 Telegram Mini App 的 `initData`，不能直接伪造 `chat_id` 调用。
 
 ### 修改时区
 
@@ -241,23 +222,16 @@ flowchart TB
         W3 -->|/test| W6[发送测试消息]
         W3 -->|/list| W7[返回时间表]
         W3 -->|/status| W8[返回当前状态]
+        W3 -->|/stats| W11[返回今日统计]
+        W3 -->|/stickers| W12[返回贴纸覆盖]
         W3 -->|按钮反馈| W9[D1 记录 done/skip/snooze 并隐藏按钮]
         W3 -->|贴纸| W10[回显 file_id]
     end
 
-    subgraph miniapp["📱 Mini App"]
-        A1[GET /app] --> A2[加载控制台]
-        A2 --> A3[校验 Telegram initData]
-        A3 --> A4[读取 D1 汇总]
-        A3 --> A5[开关提醒 / 发送测试]
-    end
-
     C7 --> TG[Telegram Bot API]
     W4 & W5 & W9 --> D1[Cloudflare D1]
-    W6 & W7 & W8 & W10 --> TG
+    W6 & W7 & W8 & W10 & W11 & W12 --> TG
     C0 & C4 --> D1
-    A4 & A5 --> D1
-    A5 --> TG
 ```
 
 ## License

@@ -6,6 +6,7 @@ import {
   deactivateChat,
   getChatStatus,
   getReminderFeedbackForDate,
+  getStickerSceneCounts,
 } from "./db";
 import { generateReminderMessage } from "./ai";
 import {
@@ -13,16 +14,19 @@ import {
   formatReminderTime,
   getLocalDate,
   getReminderScene,
+  STICKER_SCENES,
 } from "./interactions";
 import { sendStickerForScene } from "./stickers";
 
 const HELP_TEXT = [
   "✅ <b>阿尼亚开始值班！</b>",
   "",
-  "bolt特工，阿尼亚会按时间提醒你。输入框旁边的「控制台」可以查看今日进度和设置提醒。",
+  "bolt特工，阿尼亚会按时间提醒你。",
   "",
   "<b>常用指令：</b>",
-  "· /app — 打开控制台",
+  "· /list — 今日时间表",
+  "· /stats — 今日统计",
+  "· /stickers — 贴纸场景",
   "· /test — 测试提醒",
   "· /stop — 暂停提醒",
 ].join("\n");
@@ -30,7 +34,6 @@ const HELP_TEXT = [
 export async function handleCommand(
   message: TelegramMessage,
   env: Env,
-  appUrl?: string,
 ): Promise<Response> {
   const chatId = message.chat.id;
   const text = message.text?.trim() ?? "";
@@ -43,12 +46,14 @@ export async function handleCommand(
       return handleStop(message, env);
     case "/test":
       return handleTest(chatId, env);
-    case "/app":
-      return handleApp(chatId, env, appUrl);
     case "/list":
       return handleList(chatId, env);
     case "/status":
       return handleStatus(chatId, env);
+    case "/stats":
+      return handleStats(chatId, env);
+    case "/stickers":
+      return handleStickers(chatId, env);
     default:
       return handleUnknownCommand(chatId, env);
   }
@@ -177,24 +182,44 @@ async function handleStatus(chatId: number, env: Env): Promise<Response> {
   return new Response("OK");
 }
 
-async function handleApp(chatId: number, env: Env, appUrl?: string): Promise<Response> {
-  const miniAppUrl = appUrl || env.MINI_APP_URL;
-  if (!miniAppUrl) {
-    await sendMessage(
-      env.TG_BOT_TOKEN,
-      chatId,
-      "控制台还没配置地址。bolt特工先访问 /setup，让 Telegram 菜单按钮指向当前 Worker。",
-    );
-    return new Response("OK");
-  }
+async function handleStats(chatId: number, env: Env): Promise<Response> {
+  const now = new Date();
+  const date = getLocalDate(now, env.TIMEZONE);
+  const [state, feedback] = await Promise.all([
+    getChatStatus(env, chatId),
+    getReminderFeedbackForDate(env, chatId, date),
+  ]);
+  const doneCount = [...feedback.values()].filter((action) => action === "done").length;
+  const skipCount = [...feedback.values()].filter((action) => action === "skip").length;
+  const snoozeCount = [...feedback.values()].filter((action) => action === "snooze").length;
 
-  await sendMessage(env.TG_BOT_TOKEN, chatId, "打开阿尼亚提醒控制台：", {
-    replyMarkup: {
-      inline_keyboard: [[
-        { text: "打开控制台", web_app: { url: miniAppUrl } },
-      ]],
-    },
+  const msg = [
+    "📊 <b>今日统计</b>",
+    "",
+    `✅ 完成：${doneCount}/${timeline.length}`,
+    `⏭️ 跳过：${skipCount}`,
+    `💤 延后：${snoozeCount}`,
+    "",
+    `🔥 连续完成：${state?.streakDays ?? 0} 天`,
+    `🎯 总完成：${state?.totalDone ?? 0} 次`,
+  ].join("\n");
+
+  await sendMessage(env.TG_BOT_TOKEN, chatId, msg);
+  return new Response("OK");
+}
+
+async function handleStickers(chatId: number, env: Env): Promise<Response> {
+  const counts = await getStickerSceneCounts(env);
+  const lines = STICKER_SCENES.map(({ scene, label }) => {
+    const count = counts.get(scene) ?? 0;
+    return `${label} <code>${scene}</code>：${count}`;
   });
+
+  await sendMessage(
+    env.TG_BOT_TOKEN,
+    chatId,
+    ["🖼️ <b>贴纸场景</b>", "", ...lines, "", "发送贴纸给阿尼亚，可以继续添加或映射场景。"].join("\n"),
+  );
   return new Response("OK");
 }
 
@@ -202,7 +227,7 @@ async function handleUnknownCommand(chatId: number, env: Env): Promise<Response>
   await sendMessage(
     env.TG_BOT_TOKEN,
     chatId,
-    "嘎ーん 😱 阿尼亚没看懂这个指令。点输入框旁边的「控制台」，或者发送 /app。",
+    "嘎ーん 😱 阿尼亚没看懂这个指令。可以试试 /list、/stats、/stickers 或 /test。",
   );
   return new Response("OK");
 }
