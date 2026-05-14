@@ -6,13 +6,14 @@
 
 ## 功能
 
-- ⏰ 每日固定时间自动发送提醒（默认 25 个时间点，覆盖 7:30-22:30）
+- ⏰ 每日固定时间自动发送提醒（默认 26 个时间点，覆盖 7:30-22:30）
 - 🤖 Telegram Bot 指令控制
 - 👥 支持多用户，各自独立管理提醒开关
 - 💾 使用 Cloudflare D1 存储用户状态、反馈、连续完成天数和贴纸映射
 - 🧩 每条提醒支持「完成 / 跳过 / 10 分钟后」按钮，点击后自动隐藏按钮
-- 🖼️ 支持 typing 状态和场景贴纸：提醒发送时先发贴纸，再发 Anya 文案
+- 🖼️ 支持 typing 状态和场景贴纸：提醒发送时先发贴纸，再发送本地配置的 Anya 风格提醒文案
 - 📊 支持命令查看今日统计和贴纸场景
+- 📨 定时器会记录已发送的提醒，避免 Cloudflare Cron 延迟几分钟导致漏发或重复发
 
 ### Bot 指令
 
@@ -89,38 +90,13 @@ npx wrangler secret put TG_BOT_TOKEN
 # 输入你的 Telegram Bot Token
 ```
 
-### 5. 配置 Gemini AI
-
-用于定时提醒的文案会先交给 Gemini 生成；如果未配置 API Key，或 Gemini 调用失败，会自动发送 `src/timeline.ts` 中的默认文案。
-
-```bash
-npx wrangler secret put GEMINI_API_KEY
-# 输入你的 Gemini API Key
-```
-
-模型和角色 soul 在 `wrangler.toml` 的 `[vars]` 中配置：
-
-```toml
-[vars]
-TIMEZONE = "Asia/Shanghai"
-GEMINI_MODEL = "gemini-3-flash-preview"
-AI_SOUL = "Anya 的角色 soul：天真、元气、软萌，有一点小朋友式的认真和关心；短句、暖一点，但不要过度卖萌。"
-```
-
-本地开发时可以在 `.dev.vars` 中加入：
-
-```env
-TG_BOT_TOKEN=你的Bot Token
-GEMINI_API_KEY=你的Gemini API Key
-```
-
-### 6. 部署
+### 5. 部署
 
 ```bash
 npm run deploy
 ```
 
-### 7. 注册 Webhook
+### 6. 注册 Webhook
 
 部署成功后，在浏览器中访问：
 
@@ -130,7 +106,7 @@ https://your-worker.your-subdomain.workers.dev/setup
 
 看到 setup 页面里 Webhook、指令菜单和菜单按钮恢复都显示成功即为完成。
 
-### 8. 开始使用
+### 7. 开始使用
 
 在 Telegram 中向你的 Bot 发送 `/start`，即可激活每日提醒。
 
@@ -138,32 +114,20 @@ https://your-worker.your-subdomain.workers.dev/setup
 
 ## 自定义
 
-### 修改 AI 角色和模型
-
-编辑 `wrangler.toml`：
-
-```toml
-[vars]
-GEMINI_MODEL = "gemini-3-flash-preview"
-AI_SOUL = "你想要的提醒助手角色设定"
-```
-
-`GEMINI_API_KEY` 属于敏感信息，推荐使用 Cloudflare Worker Secret 或 Cloudflare Dashboard 的 Secret 变量配置，不要直接提交到仓库。
-
 ### 修改提醒时间和内容
 
 编辑 `src/timeline.ts`：
 
 ```ts
 export const timeline: TimelineItem[] = [
-  { hour: 7, minute: 30, message: "⏰ <b>起床！</b>\n\n· 不要赖床刷手机\n· 拉开窗帘让光线进来 🌞" },
+  { hour: 7, minute: 30, message: "⏰ <b>起床啦！</b>\n\nbolt特工，不可以赖床刷手机！阿尼亚发现太阳光任务，快拉开窗帘，哇酷哇酷！✨" },
   // ...添加、删除或修改时间点
 ];
 ```
 
 消息支持 HTML 格式（`<b>`、`<i>`、`<code>` 等），使用 `\n` 换行。
 
-> **注意：** 默认 Cron 每 5 分钟执行一次（`*/5 * * * *`）。如果添加了不是 5 倍数分钟的时间点，需要在 `wrangler.toml` 中将 cron 改为 `* * * * *`。
+> **注意：** 默认 Cron 每 1 分钟执行一次（`* * * * *`）。代码会扫描最近 20 分钟内到期且未发送的提醒，抵消 Cron 轻微延迟；发送成功后会写入 D1，避免重复发送。
 
 ### 配置贴纸
 
@@ -190,7 +154,6 @@ npm run dev
 
 ```
 TG_BOT_TOKEN=你的Bot Token
-GEMINI_API_KEY=你的Gemini API Key
 ```
 
 本地 D1 可以先应用 migration：
@@ -203,14 +166,15 @@ npx wrangler d1 migrations apply DB --local
 
 ```mermaid
 flowchart TB
-    subgraph cron["⏰ Cron Trigger - 每 5 分钟"]
+    subgraph cron["⏰ Cron Trigger - 每 1 分钟"]
         C1[获取 UTC 时间] --> C2[转换为本地时区]
         C2 --> C0[扫描到期 snooze]
-        C2 --> C3{匹配 timeline?}
+        C2 --> C3{最近 20 分钟有到期提醒?}
         C3 -->|是| C4[从 D1 获取 active 用户]
         C4 --> C5[发送 typing 状态]
-        C5 --> C6[Gemini 生成 Anya 文案]
-        C6 --> C7[发送贴纸 + 提醒 + 按钮]
+        C5 --> C6[读取本地提醒文案]
+        C6 --> C9[检查/占用发送记录]
+        C9 --> C7[发送贴纸 + 提醒 + 按钮]
         C3 -->|否| C8[结束]
     end
 

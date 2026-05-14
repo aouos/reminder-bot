@@ -56,6 +56,10 @@ interface FeedbackStatusRow {
   action: FeedbackAction;
 }
 
+interface DeliveryTimeRow {
+  reminder_time: string;
+}
+
 interface ChatIdRow {
   chat_id: number;
 }
@@ -245,6 +249,65 @@ export async function getReminderFeedbackForDate(
   return new Map(results.map((row) => [row.reminder_time, row.action]));
 }
 
+export async function getReminderDeliveryTimesForDate(
+  env: Env,
+  chatId: number,
+  reminderDate: string,
+): Promise<Set<string>> {
+  const { results } = await env.DB.prepare(`
+    SELECT reminder_time
+    FROM reminder_deliveries
+    WHERE chat_id = ? AND reminder_date = ?
+  `).bind(chatId, reminderDate).all<DeliveryTimeRow>();
+
+  return new Set(results.map((row) => row.reminder_time));
+}
+
+export async function claimReminderDelivery(
+  env: Env,
+  input: {
+    chatId: number;
+    reminderDate: string;
+    reminderTime: string;
+  },
+): Promise<boolean> {
+  const id = `${input.chatId}:${input.reminderDate}:${input.reminderTime}`;
+  const now = new Date().toISOString();
+
+  const result = await env.DB.prepare(`
+    INSERT OR IGNORE INTO reminder_deliveries (
+      id, chat_id, reminder_date, reminder_time, created_at
+    )
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(
+    id,
+    input.chatId,
+    input.reminderDate,
+    input.reminderTime,
+    now,
+  ).run();
+
+  return result.meta.changes > 0;
+}
+
+export async function releaseReminderDelivery(
+  env: Env,
+  input: {
+    chatId: number;
+    reminderDate: string;
+    reminderTime: string;
+  },
+): Promise<void> {
+  await env.DB.prepare(`
+    DELETE FROM reminder_deliveries
+    WHERE chat_id = ? AND reminder_date = ? AND reminder_time = ?
+  `).bind(
+    input.chatId,
+    input.reminderDate,
+    input.reminderTime,
+  ).run();
+}
+
 export async function getStickerSceneCounts(env: Env): Promise<Map<string, number>> {
   const { results } = await env.DB.prepare(`
     SELECT m.scene, COUNT(*) AS count
@@ -268,6 +331,22 @@ export async function createSnooze(
   },
 ): Promise<void> {
   const now = new Date().toISOString();
+  // Keep only one pending snooze per reminder. This prevents repeated taps from
+  // scheduling duplicate delayed reminders.
+  await env.DB.prepare(`
+    UPDATE snoozes
+    SET status = 'cancelled', updated_at = ?
+    WHERE chat_id = ?
+      AND reminder_date = ?
+      AND reminder_time = ?
+      AND status = 'pending'
+  `).bind(
+    now,
+    input.chatId,
+    input.reminderDate,
+    input.reminderTime,
+  ).run();
+
   await env.DB.prepare(`
     INSERT INTO snoozes (
       id, chat_id, due_at, reminder_date, reminder_time,

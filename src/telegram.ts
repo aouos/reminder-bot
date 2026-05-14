@@ -152,13 +152,19 @@ async function telegramRequest<T>(
 
   const res = await fetch(url, init);
   if (!res.ok) {
+    console.warn("Telegram API request failed", { method, status: res.status });
     return {
       ok: false,
       description: `Telegram API returned ${res.status}`,
     };
   }
 
-  return res.json<TelegramApiResponse<T>>();
+  const data = await res.json<TelegramApiResponse<T>>();
+  if (!data.ok) {
+    console.warn("Telegram API rejected request", { method, description: data.description });
+  }
+
+  return data;
 }
 
 function normalizeSendMessageOptions(

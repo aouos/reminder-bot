@@ -5,10 +5,10 @@ import {
   activateChat,
   deactivateChat,
   getChatStatus,
+  getReminderDeliveryTimesForDate,
   getReminderFeedbackForDate,
   getStickerSceneCounts,
 } from "./db";
-import { generateReminderMessage } from "./ai";
 import {
   buildTestReminderKeyboard,
   formatReminderTime,
@@ -102,12 +102,10 @@ export async function sendTestReminder(chatId: number, env: Env): Promise<void> 
 
   const reminderDate = getLocalDate(now, env.TIMEZONE);
   const reminderTime = formatReminderTime(item);
-  const generated = await generateReminderMessage({ env, item, now });
-  const isGenerated = generated !== item.message;
 
-  await sendStickerForScene(env, chatId, getReminderScene(item, generated));
-  await sendMessage(env.TG_BOT_TOKEN, chatId, generated, {
-    parseMode: isGenerated ? null : "HTML",
+  await sendStickerForScene(env, chatId, getReminderScene(item));
+  await sendMessage(env.TG_BOT_TOKEN, chatId, item.message, {
+    parseMode: "HTML",
     replyMarkup: buildTestReminderKeyboard(reminderDate, reminderTime),
   });
 }
@@ -118,7 +116,10 @@ async function handleList(chatId: number, env: Env): Promise<Response> {
     now.toLocaleString("en-US", { timeZone: env.TIMEZONE }),
   );
   const reminderDate = getLocalDate(now, env.TIMEZONE);
-  const feedback = await getReminderFeedbackForDate(env, chatId, reminderDate);
+  const [feedback, deliveries] = await Promise.all([
+    getReminderFeedbackForDate(env, chatId, reminderDate),
+    getReminderDeliveryTimesForDate(env, chatId, reminderDate),
+  ]);
   const currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
 
   const totalCount = timeline.length;
@@ -136,7 +137,7 @@ async function handleList(chatId: number, env: Env): Promise<Response> {
     const itemMinutes = item.hour * 60 + item.minute;
     const timeStr = `${String(item.hour).padStart(2, "0")}:${String(item.minute).padStart(2, "0")}`;
     const action = feedback.get(timeStr);
-    const indicator = getListIndicator(action, itemMinutes <= currentMinutes);
+    const indicator = getListIndicator(action, itemMinutes <= currentMinutes, deliveries.has(timeStr));
     const title = item.message.split("\n")[0].replace(/<[^>]*>/g, "");
     msg += `${indicator} <code>${timeStr}</code>  ${title}\n`;
   }
@@ -147,7 +148,7 @@ async function handleList(chatId: number, env: Env): Promise<Response> {
   return new Response("OK");
 }
 
-function getListIndicator(action: string | undefined, isPast: boolean): string {
+function getListIndicator(action: string | undefined, isPast: boolean, delivered: boolean): string {
   switch (action) {
     case "done":
       return "✅";
@@ -156,6 +157,7 @@ function getListIndicator(action: string | undefined, isPast: boolean): string {
     case "snooze":
       return "💤";
     default:
+      if (delivered) return "📨";
       return isPast ? "▫️" : "⏳";
   }
 }

@@ -1,9 +1,6 @@
 export interface Env {
   TG_BOT_TOKEN: string;
   TIMEZONE: string;
-  GEMINI_API_KEY?: string;
-  GEMINI_MODEL?: string;
-  AI_SOUL?: string;
   DB: D1Database;
 }
 

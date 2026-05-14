@@ -37,6 +37,18 @@ CREATE TABLE IF NOT EXISTS reminder_feedback (
 CREATE INDEX IF NOT EXISTS idx_reminder_feedback_chat_date
   ON reminder_feedback(chat_id, reminder_date);
 
+CREATE TABLE IF NOT EXISTS reminder_deliveries (
+  id TEXT PRIMARY KEY,
+  chat_id INTEGER NOT NULL,
+  reminder_date TEXT NOT NULL,
+  reminder_time TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  UNIQUE(chat_id, reminder_date, reminder_time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reminder_deliveries_chat_date
+  ON reminder_deliveries(chat_id, reminder_date);
+
 CREATE TABLE IF NOT EXISTS snoozes (
   id TEXT PRIMARY KEY,
   chat_id INTEGER NOT NULL,

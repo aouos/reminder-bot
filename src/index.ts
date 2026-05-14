@@ -10,15 +10,18 @@ import {
 } from "./telegram";
 import { handleCommand } from "./commands";
 import { timeline } from "./timeline";
-import { generateReminderMessage } from "./ai";
 import { sendStickerForScene } from "./stickers";
 import {
+  claimReminderDelivery,
   createSnooze,
   getActiveChatIds,
+  getReminderDeliveryTimesForDate,
+  getReminderFeedbackForDate,
   getDueSnoozes,
   mapStickerToScene,
   markSnoozeSent,
   recordFeedback,
+  releaseReminderDelivery,
   upsertStickerAsset,
 } from "./db";
 import {
@@ -35,6 +38,9 @@ import {
 
 const REMINDER_SNOOZE_DELAY_MS = 10 * 60 * 1000;
 const TEST_SNOOZE_DELAY_MS = 10 * 1000;
+// Cloudflare cron is not second-accurate; scan a short catch-up window and use
+// D1 delivery claims to avoid duplicate sends when a trigger runs late.
+const REMINDER_CATCH_UP_WINDOW_MINUTES = 20;
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -129,14 +135,9 @@ export default {
     const localTime = new Date(
       now.toLocaleString("en-US", { timeZone: env.TIMEZONE }),
     );
-    const currentHour = localTime.getHours();
-    const currentMinute = localTime.getMinutes();
+    const dueItems = getDueTimelineItems(localTime);
 
-    const matched = timeline.find(
-      (item) => item.hour === currentHour && item.minute === currentMinute,
-    );
-
-    if (!matched) return;
+    if (dueItems.length === 0) return;
 
     const chatIds = await getActiveChatIds(env);
     if (chatIds.length === 0) return;
@@ -145,44 +146,61 @@ export default {
       chatIds.map((chatId) => sendChatAction(env.TG_BOT_TOKEN, chatId)),
     );
 
-    const message = await generateReminderMessage({ env, item: matched, now });
-    const isGenerated = message !== matched.message;
     const reminderDate = getLocalDate(now, env.TIMEZONE);
-    const reminderTime = formatReminderTime(matched);
-    const replyMarkup = buildReminderKeyboard(reminderDate, reminderTime);
-    const scene = getReminderScene(matched, message);
 
-    await Promise.allSettled(
-      chatIds.map(async (chatId) => {
-        await sendStickerForScene(env, chatId, scene);
-        return sendReminderMessage(
-          env.TG_BOT_TOKEN,
-          chatId,
-          message,
-          matched.message,
-          isGenerated,
-          replyMarkup,
-        );
-      }),
-    );
+    for (const item of dueItems) {
+      const reminderTime = formatReminderTime(item);
+      const replyMarkup = buildReminderKeyboard(reminderDate, reminderTime);
+      const scene = getReminderScene(item);
+
+      await Promise.allSettled(
+        chatIds.map(async (chatId) => {
+          const [deliveries, feedback] = await Promise.all([
+            getReminderDeliveryTimesForDate(env, chatId, reminderDate),
+            getReminderFeedbackForDate(env, chatId, reminderDate),
+          ]);
+
+          if (deliveries.has(reminderTime) || feedback.has(reminderTime)) {
+            return;
+          }
+
+          const claimed = await claimReminderDelivery(env, { chatId, reminderDate, reminderTime });
+          if (!claimed) return;
+
+          await sendStickerForScene(env, chatId, scene);
+          const ok = await sendReminderMessage(
+            env.TG_BOT_TOKEN,
+            chatId,
+            item.message,
+            replyMarkup,
+          );
+
+          if (!ok) {
+            await releaseReminderDelivery(env, { chatId, reminderDate, reminderTime });
+          }
+        }),
+      );
+    }
   },
 };
+
+function getDueTimelineItems(localTime: Date): typeof timeline {
+  const currentMinutes = localTime.getHours() * 60 + localTime.getMinutes();
+
+  return timeline.filter((item) => {
+    const itemMinutes = item.hour * 60 + item.minute;
+    const ageMinutes = currentMinutes - itemMinutes;
+    return ageMinutes >= 0 && ageMinutes < REMINDER_CATCH_UP_WINDOW_MINUTES;
+  });
+}
 
 async function sendReminderMessage(
   token: string,
   chatId: number,
   message: string,
-  fallbackMessage: string,
-  isGenerated: boolean,
   replyMarkup: InlineKeyboardMarkup,
 ): Promise<boolean> {
-  const ok = await sendMessage(token, chatId, message, {
-    parseMode: isGenerated ? null : "HTML",
-    replyMarkup,
-  });
-  if (ok || !isGenerated) return ok;
-
-  return sendMessage(token, chatId, fallbackMessage, {
+  return sendMessage(token, chatId, message, {
     parseMode: "HTML",
     replyMarkup,
   });
