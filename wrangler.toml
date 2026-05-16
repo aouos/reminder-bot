@@ -7,13 +7,12 @@ enabled = true
 head_sampling_rate = 1
 
 [triggers]
-crons = ["* * * * *"]
+crons = ["*/30 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
 database_name = "reminder-bot-db"
-database_id = "f8bbbf30-33fc-4da9-8d93-b7bd4b545713"
-migrations_dir = "migrations"
+database_id = "e8ea3d78-62a5-4fd6-95e3-5f41a7596d0f"
 
 [vars]
 TIMEZONE = "Asia/Shanghai"

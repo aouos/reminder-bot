@@ -1,53 +1,35 @@
-import type { TimelineItem } from "./types";
+import type { ScheduleItem } from "./types";
 
-export const timeline: TimelineItem[] = [
-  // 🌅 起床
+export const dailySchedule: ScheduleItem[] = [
   { hour: 7, minute: 30, message: "⏰ <b>起床啦！</b>\n\nbolt特工，不可以赖床刷手机！阿尼亚发现太阳光任务，快拉开窗帘，哇酷哇酷！✨" },
-
-  // 🚶 晨间散步
-  { hour: 7, minute: 45, message: "🚶 <b>晨间散步时间！</b>\n\nbolt特工，出门走 30 分钟，正常速度就好。今天目标 8000-10000 步，早晨先拿下一小块！" },
-
-  // 🍳 早餐 + 颈部拉伸
-  { hour: 8, minute: 15, message: "🍳 <b>早餐时间！</b>\n\n父亲（Chichi），先好好吃饭。吃完做 5 分钟颈部拉伸，前后左右各 15 秒，再按后脑勺两侧每边 1 分钟；咖啡和茶 14:00 前喝完！" },
-
-  // 📚 上午工作学习（每 30 分钟提醒）
+  { hour: 8, minute: 0, message: "🚶 <b>晨间散步时间！</b>\n\nbolt特工，出门走 30 分钟，正常速度就好。早晨自然光任务开始！" },
+  { hour: 8, minute: 30, message: "🍳 <b>早餐时间！</b>\n\n父亲（Chichi），先好好吃饭。吃完做 5 分钟颈部拉伸，咖啡和茶记得 14:00 前喝完！" },
   { hour: 9, minute: 0, message: "📚 <b>开始工作学习！</b>\n\nbolt特工，任务开始。屏幕放到平视或略低一点，不要一直低头，脖子会发出大危机警报！" },
-  { hour: 9, minute: 30, message: "🧘 <b>活动提醒</b>\n\nbolt特工，站起来走一走，转转脖子。记得 20-20-20：看 6 米外 20 秒，眼睛也要休息！" },
+  { hour: 9, minute: 30, message: "🧘 <b>活动提醒</b>\n\nbolt特工，站起来走一走，转转脖子。记得看 6 米外 20 秒，眼睛也要休息！" },
   { hour: 10, minute: 0, message: "💧 <b>喝水提醒</b>\n\nbolt特工，生命之水补给时间！倒杯水喝掉，再看看窗外，让眼睛偷偷放假一下。" },
   { hour: 10, minute: 30, message: "🧘 <b>活动提醒</b>\n\nbolt特工，起来伸展一下，活动肩颈。坐姿坐好，屏幕保持平视，阿尼亚在盯——" },
   { hour: 11, minute: 0, message: "💧 <b>喝水提醒</b>\n\nbolt特工，该喝水了。喝完看窗外远处 20 秒，眼睛小兵也需要补给！" },
   { hour: 11, minute: 30, message: "🧘 <b>活动提醒</b>\n\nbolt特工，走动一下，顺便喝口水。午饭快来了，阿尼亚已经闻到饭饭味道！" },
-
-  // 🍱 午餐
   { hour: 12, minute: 0, message: "🍱 <b>午餐时间！</b>\n\n父亲（Chichi），好好吃饭，适量就好。阿尼亚批准午餐任务开始！" },
-
-  // 🚶 餐后走动 + 😴 午休
   { hour: 12, minute: 30, message: "🚶 <b>餐后走动</b>\n\nbolt特工，饭后出去走 10-15 分钟，慢慢走就行。肚肚消化小队出发！" },
   { hour: 13, minute: 0, message: "😴 <b>午休时间</b>\n\n父亲（Chichi），设好闹钟，最多睡 30 分钟。睡不着就闭眼休息，不准偷看手机！" },
   { hour: 13, minute: 30, message: "⏰ <b>午休结束！</b>\n\nbolt特工，起床活动一下。下午任务要开始了，阿尼亚给你加油！" },
-
-  // 📚 下午工作学习（每 30 分钟提醒）
   { hour: 14, minute: 0, message: "📚 <b>下午工作学习开始！</b>\n\nbolt特工，下午任务开始。咖啡和茶从现在起停止，不然晚上睡觉会变成大危机！" },
   { hour: 14, minute: 30, message: "💧 <b>喝水提醒</b>\n\nbolt特工，补充水分，保持状态。喝完看看远处 20 秒，阿尼亚记在秘密本本里。" },
   { hour: 15, minute: 0, message: "🧘 <b>活动提醒</b>\n\nbolt特工，站起来走动，伸展身体，再转转脖子。肩颈放松任务，现在执行！" },
   { hour: 15, minute: 30, message: "💧 <b>喝水提醒</b>\n\nbolt特工，喝口水。今天目标 1500-2000ml，不要让身体变成干巴巴花生！" },
-  { hour: 16, minute: 0, message: "🧘 <b>活动提醒</b>\n\nbolt特工，起来转转，看 6 米外 20 秒。20-20-20 眼睛保卫战，哇酷哇酷！" },
+  { hour: 16, minute: 0, message: "🧘 <b>活动提醒</b>\n\nbolt特工，起来转转，看 6 米外 20 秒。眼睛保卫战，哇酷哇酷！" },
   { hour: 16, minute: 30, message: "💧 <b>喝水提醒</b>\n\nbolt特工，倒杯水吧。喝完活动一下手腕，手手也要休息。" },
   { hour: 17, minute: 0, message: "🧘 <b>活动提醒</b>\n\nbolt特工，走动一下，最后一小时啦。坐姿坐好，不要让椅子把你抓住！" },
   { hour: 17, minute: 30, message: "💧 <b>喝水提醒</b>\n\nbolt特工，补充水分，准备收工。今天步数够了吗？晚饭后还可以散步补一补。" },
-
-  // 🍽️ 晚餐
   { hour: 18, minute: 0, message: "🍽️ <b>晚餐时间</b>\n\n父亲（Chichi），晚饭不要吃太饱，少油腻。19:30 后别再吃东西，这是睡觉秘密任务！" },
-
-  // 🚶 饭后活动
   { hour: 18, minute: 30, message: "🚶 <b>饭后活动时间</b>\n\nbolt特工，出去散步 20-30 分钟，或者做点轻家务。不要剧烈运动，晚上还要睡好觉！" },
-
-  // 📖 放松时间
+  { hour: 19, minute: 0, message: "💧 <b>晚间喝水</b>\n\nbolt特工，喝几口水就好，不要一次喝太多。晚上任务要慢慢变安静。" },
   { hour: 19, minute: 30, message: "📖 <b>放松时间</b>\n\nbolt特工，今天辛苦啦。看看书、听音乐、聊聊天都可以；少看屏幕，耳机音量控制在 70dB 以下。" },
-
-  // 📵 屏幕宵禁
+  { hour: 20, minute: 0, message: "🧘 <b>轻松活动</b>\n\nbolt特工，轻轻伸展一下肩颈和后背。不要做剧烈运动，阿尼亚要保护你的睡觉任务。" },
+  { hour: 20, minute: 30, message: "🌙 <b>晚间放松</b>\n\nbolt特工，开始把节奏慢下来。少看屏幕，整理一下明天的小任务，阿尼亚觉得这样睡觉会更安心。" },
+  { hour: 21, minute: 0, message: "🛁 <b>睡前准备</b>\n\n父亲（Chichi），可以准备洗澡和放松了。把房间灯光调暗一点，睡意小队集合！" },
   { hour: 21, minute: 30, message: "📵 <b>屏幕宵禁！</b>\n\nbolt特工，把手机放到卧室外。洗 37-38°C 温水澡，按揉后脑勺和颈部 3-5 分钟，再腹式呼吸 10 分钟：吸 4 秒，停 4 秒，呼 6 秒。" },
-
-  // 🛏️ 上床
+  { hour: 22, minute: 0, message: "🌙 <b>最后放松</b>\n\nbolt特工，听点白噪音或轻音乐，别再看屏幕。阿尼亚宣布：睡觉倒计时开始。" },
   { hour: 22, minute: 30, message: "🛏️ <b>上床啦，晚安</b> 🌙\n\n父亲（Chichi），睡不着也没关系，不要焦虑。可以去另一个房间坐一会儿，做几分钟呼吸再回来。" },
 ];

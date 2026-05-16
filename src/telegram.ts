@@ -47,18 +47,6 @@ export async function sendMessage(
   return result.ok;
 }
 
-export async function sendChatAction(
-  token: string,
-  chatId: number | string,
-  action: "typing" | "upload_photo" | "record_voice" | "upload_document" = "typing",
-): Promise<boolean> {
-  const result = await telegramRequest<true>(token, "sendChatAction", {
-    chat_id: chatId,
-    action,
-  });
-  return result.ok;
-}
-
 export async function answerCallbackQuery(
   token: string,
   callbackQueryId: string,

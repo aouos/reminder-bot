@@ -1,6 +1,6 @@
-import type { InlineKeyboardMarkup, TimelineItem } from "./types";
+import type { InlineKeyboardMarkup, ScheduleItem } from "./types";
 
-export type ReminderAction = "done" | "skip" | "snooze";
+export type ReminderAction = "done" | "skip";
 export type FeedbackAction = ReminderAction;
 export type StickerScene =
   | "wake"
@@ -36,34 +36,31 @@ export const STICKER_SCENES: Array<{ scene: StickerScene; label: string }> = [
 const ACTION_TO_CODE: Record<ReminderAction, string> = {
   done: "d",
   skip: "k",
-  snooze: "z",
 };
 
 const CODE_TO_ACTION: Record<string, ReminderAction> = {
   d: "done",
   k: "skip",
-  z: "snooze",
 };
 
 export function buildReminderKeyboard(
   reminderDate: string,
   reminderTime: string,
 ): InlineKeyboardMarkup {
-  return buildActionKeyboard("r", reminderDate, reminderTime, "⏰ 10 分钟后");
+  return buildActionKeyboard("r", reminderDate, reminderTime);
 }
 
 export function buildTestReminderKeyboard(
   reminderDate: string,
   reminderTime: string,
 ): InlineKeyboardMarkup {
-  return buildActionKeyboard("t", reminderDate, reminderTime, "⏰ 10 秒后");
+  return buildActionKeyboard("t", reminderDate, reminderTime);
 }
 
 function buildActionKeyboard(
   prefix: "r" | "t",
   reminderDate: string,
   reminderTime: string,
-  snoozeLabel: string,
 ): InlineKeyboardMarkup {
   const time = reminderTime.replace(":", "");
 
@@ -72,9 +69,6 @@ function buildActionKeyboard(
       [
         { text: "✅ 完成", callback_data: buildCallbackData(prefix, "done", reminderDate, time) },
         { text: "⏭️ 跳过", callback_data: buildCallbackData(prefix, "skip", reminderDate, time) },
-      ],
-      [
-        { text: snoozeLabel, callback_data: buildCallbackData(prefix, "snooze", reminderDate, time) },
       ],
     ],
   };
@@ -149,11 +143,11 @@ export function getLocalDate(date: Date, timeZone: string): string {
   return `${values.year}-${values.month}-${values.day}`;
 }
 
-export function formatReminderTime(item: TimelineItem): string {
+export function formatReminderTime(item: ScheduleItem): string {
   return `${String(item.hour).padStart(2, "0")}:${String(item.minute).padStart(2, "0")}`;
 }
 
-export function getReminderScene(item?: TimelineItem, fallbackText: string = ""): string {
+export function getReminderScene(item?: ScheduleItem, fallbackText: string = ""): string {
   const text = `${item?.message ?? ""}\n${fallbackText}`;
 
   if (/起床|早晨|晨间|窗帘/.test(text)) return "wake";

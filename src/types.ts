@@ -1,10 +1,11 @@
 export interface Env {
   TG_BOT_TOKEN: string;
+  TG_CHAT_ID?: string;
   TIMEZONE: string;
   DB: D1Database;
 }
 
-export interface TimelineItem {
+export interface ScheduleItem {
   hour: number;
   minute: number;
   message: string;

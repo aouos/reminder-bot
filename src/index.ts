@@ -2,32 +2,30 @@ import type { Env, InlineKeyboardMarkup, TelegramUpdate } from "./types";
 import {
   answerCallbackQuery,
   editMessageReplyMarkup,
-  sendChatAction,
   sendMessage,
   setCommandsMenuButton,
   setWebhook,
   setMyCommands,
 } from "./telegram";
 import { handleCommand } from "./commands";
-import { timeline } from "./timeline";
+import { dailySchedule } from "./schedule";
 import { sendStickerForScene } from "./stickers";
 import {
-  claimReminderDelivery,
-  createSnooze,
-  getActiveChatIds,
-  getReminderDeliveryTimesForDate,
-  getReminderFeedbackForDate,
-  getDueSnoozes,
+  claimReminderJob,
+  getDueReminderJobs,
+  ensureReminderJobs,
+  hasReminderJobsForDate,
+  getBotStatus,
   mapStickerToScene,
-  markSnoozeSent,
+  markExpiredReminderJobs,
+  markReminderJobFailed,
+  markReminderJobSent,
   recordFeedback,
-  releaseReminderDelivery,
   upsertStickerAsset,
 } from "./db";
 import {
   buildReminderKeyboard,
   buildStickerSceneKeyboard,
-  buildTestReminderKeyboard,
   formatReminderTime,
   getLocalDate,
   getReminderScene,
@@ -36,19 +34,18 @@ import {
   STICKER_SCENES,
 } from "./interactions";
 
-const REMINDER_SNOOZE_DELAY_MS = 10 * 60 * 1000;
-const TEST_SNOOZE_DELAY_MS = 10 * 1000;
-// Cloudflare cron is not second-accurate; scan a short catch-up window and use
-// D1 delivery claims to avoid duplicate sends when a trigger runs late.
-const REMINDER_CATCH_UP_WINDOW_MINUTES = 20;
+const REMINDER_LOCK_MS = 2 * 60 * 1000;
+const REMINDER_JOB_EXPIRE_MS = 90 * 60 * 1000;
+const MESSAGE_SEND_ATTEMPTS = 3;
+const MESSAGE_RETRY_DELAY_MS = 500;
 
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
     // POST /webhook - Telegram webhook endpoint
     if (request.method === "POST" && url.pathname === "/webhook") {
-      return handleWebhook(request, env, ctx);
+      return handleWebhook(request, env);
     }
 
     // GET /setup - Register webhook and bot commands
@@ -126,72 +123,136 @@ export default {
   },
 
   async scheduled(
-    _controller: ScheduledController,
+    controller: ScheduledController,
     env: Env,
   ): Promise<void> {
+    const targetChatId = getTargetChatId(env);
+    if (targetChatId === null) return;
+
+    const status = await getBotStatus(env);
+    if (!status.enabled) return;
+
     const now = new Date();
-    await sendDueSnoozes(env, now);
+    const scheduledAt = new Date(controller.scheduledTime);
+    const reminderDate = getLocalDate(scheduledAt, env.TIMEZONE);
+    const shouldPrepareJobs = isLocalMidnight(scheduledAt, env.TIMEZONE)
+      || !(await hasReminderJobsForDate(env, reminderDate));
 
-    const localTime = new Date(
-      now.toLocaleString("en-US", { timeZone: env.TIMEZONE }),
-    );
-    const dueItems = getDueTimelineItems(localTime);
+    if (shouldPrepareJobs) {
+      await ensureReminderJobs(env, buildDailyReminderJobs(reminderDate, env.TIMEZONE));
+    }
 
-    if (dueItems.length === 0) return;
+    await markExpiredReminderJobs(env, now);
 
-    const chatIds = await getActiveChatIds(env);
-    if (chatIds.length === 0) return;
+    const enabledSince = status.updatedAt ? new Date(status.updatedAt) : now;
+    const dueJobs = await getDueReminderJobs(env, now, enabledSince);
+    if (dueJobs.length === 0) return;
 
-    await Promise.allSettled(
-      chatIds.map((chatId) => sendChatAction(env.TG_BOT_TOKEN, chatId)),
-    );
+    for (const job of dueJobs) {
+      const claimed = await claimReminderJob(env, job.id, now, REMINDER_LOCK_MS);
+      if (!claimed) continue;
 
-    const reminderDate = getLocalDate(now, env.TIMEZONE);
+      try {
+        await sendStickerForScene(env, targetChatId, job.scene);
+        const ok = await sendReminderMessageWithRetry(
+          env.TG_BOT_TOKEN,
+          targetChatId,
+          job.message,
+          buildReminderKeyboard(job.reminderDate, job.reminderTime),
+        );
 
-    for (const item of dueItems) {
-      const reminderTime = formatReminderTime(item);
-      const replyMarkup = buildReminderKeyboard(reminderDate, reminderTime);
-      const scene = getReminderScene(item);
+        if (ok) {
+          await markReminderJobSent(env, job.id, new Date());
+          continue;
+        }
 
-      await Promise.allSettled(
-        chatIds.map(async (chatId) => {
-          const [deliveries, feedback] = await Promise.all([
-            getReminderDeliveryTimesForDate(env, chatId, reminderDate),
-            getReminderFeedbackForDate(env, chatId, reminderDate),
-          ]);
-
-          if (deliveries.has(reminderTime) || feedback.has(reminderTime)) {
-            return;
-          }
-
-          const claimed = await claimReminderDelivery(env, { chatId, reminderDate, reminderTime });
-          if (!claimed) return;
-
-          await sendStickerForScene(env, chatId, scene);
-          const ok = await sendReminderMessage(
-            env.TG_BOT_TOKEN,
-            chatId,
-            item.message,
-            replyMarkup,
-          );
-
-          if (!ok) {
-            await releaseReminderDelivery(env, { chatId, reminderDate, reminderTime });
-          }
-        }),
-      );
+        await markReminderJobFailed(env, job.id);
+      } catch (error) {
+        console.warn(
+          "Reminder job delivery failed",
+          error instanceof Error ? error.message : String(error),
+        );
+        await markReminderJobFailed(env, job.id);
+      }
     }
   },
 };
 
-function getDueTimelineItems(localTime: Date): typeof timeline {
-  const currentMinutes = localTime.getHours() * 60 + localTime.getMinutes();
+function buildDailyReminderJobs(reminderDate: string, timeZone: string) {
+  return dailySchedule.map((item) => {
+    const reminderTime = formatReminderTime(item);
+    const dueAt = localDateTimeToUtc(reminderDate, item.hour, item.minute, timeZone);
 
-  return timeline.filter((item) => {
-    const itemMinutes = item.hour * 60 + item.minute;
-    const ageMinutes = currentMinutes - itemMinutes;
-    return ageMinutes >= 0 && ageMinutes < REMINDER_CATCH_UP_WINDOW_MINUTES;
+    return {
+      id: `${reminderDate}:${reminderTime}`,
+      reminderDate,
+      reminderTime,
+      dueAt: dueAt.toISOString(),
+      expiresAt: new Date(dueAt.getTime() + REMINDER_JOB_EXPIRE_MS).toISOString(),
+      message: item.message,
+      scene: getReminderScene(item),
+    };
   });
+}
+
+function isLocalMidnight(date: Date, timeZone: string): boolean {
+  const parts = getTimeZoneParts(date, timeZone);
+  return parts.hour === 0 && parts.minute === 0;
+}
+
+function localDateTimeToUtc(
+  localDate: string,
+  hour: number,
+  minute: number,
+  timeZone: string,
+): Date {
+  const [year, month, day] = localDate.split("-").map(Number);
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  const actual = getTimeZoneParts(utcGuess, timeZone);
+  const desiredUtc = Date.UTC(year, month - 1, day, hour, minute);
+  const actualUtc = Date.UTC(
+    actual.year,
+    actual.month - 1,
+    actual.day,
+    actual.hour,
+    actual.minute,
+  );
+
+  return new Date(utcGuess.getTime() - (actualUtc - desiredUtc));
+}
+
+function getTimeZoneParts(date: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+    hour: Number(values.hour),
+    minute: Number(values.minute),
+  };
+}
+
+function getTargetChatId(env: Env): number | null {
+  const value = env.TG_CHAT_ID?.trim();
+  if (!value) return null;
+
+  const chatId = Number(value);
+  return Number.isSafeInteger(chatId) ? chatId : null;
+}
+
+function isTargetChat(env: Env, chatId: number): boolean {
+  const targetChatId = getTargetChatId(env);
+  return targetChatId !== null && targetChatId === chatId;
 }
 
 async function sendReminderMessage(
@@ -206,16 +267,44 @@ async function sendReminderMessage(
   });
 }
 
+async function sendReminderMessageWithRetry(
+  token: string,
+  chatId: number,
+  message: string,
+  replyMarkup: InlineKeyboardMarkup,
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= MESSAGE_SEND_ATTEMPTS; attempt += 1) {
+    try {
+      const ok = await sendReminderMessage(token, chatId, message, replyMarkup);
+      if (ok) return true;
+    } catch (error) {
+      console.warn(
+        "Reminder message send attempt failed",
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+
+    if (attempt < MESSAGE_SEND_ATTEMPTS) {
+      await delay(MESSAGE_RETRY_DELAY_MS);
+    }
+  }
+
+  return false;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function handleWebhook(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
 ): Promise<Response> {
   try {
     const update: TelegramUpdate = await request.json();
 
     if (update.callback_query) {
-      return handleCallbackQuery(update.callback_query, env, ctx);
+      return handleCallbackQuery(update.callback_query, env);
     }
 
     if (update.message?.text?.startsWith("/")) {
@@ -223,6 +312,10 @@ async function handleWebhook(
     }
 
     if (update.message?.sticker) {
+      if (!isTargetChat(env, update.message.chat.id)) {
+        return new Response("OK");
+      }
+
       return handleStickerMessage(update.message, env);
     }
 
@@ -235,8 +328,13 @@ async function handleWebhook(
 async function handleCallbackQuery(
   query: NonNullable<TelegramUpdate["callback_query"]>,
   env: Env,
-  ctx: ExecutionContext,
 ): Promise<Response> {
+  const callbackChatId = query.message?.chat.id ?? query.from.id;
+  if (!isTargetChat(env, callbackChatId)) {
+    await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, "这个 bot 已绑定固定 chat。");
+    return new Response("OK");
+  }
+
   const stickerMapping = parseStickerSceneCallbackData(query.data);
   if (stickerMapping) {
     const label = STICKER_SCENES.find(({ scene }) => scene === stickerMapping.scene)?.label
@@ -266,42 +364,14 @@ async function handleCallbackQuery(
     return new Response("OK");
   }
 
-  const chatId = query.message?.chat.id ?? query.from.id;
+  const chatId = callbackChatId;
   const messageId = query.message?.message_id;
-  const item = timeline.find((entry) => formatReminderTime(entry) === parsed.reminderTime);
 
   if (parsed.kind === "test") {
-    return handleTestCallback(query, env, ctx, parsed, chatId, messageId, item);
-  }
-
-  if (parsed.action === "snooze") {
-    const dueAt = new Date(Date.now() + REMINDER_SNOOZE_DELAY_MS);
-    await createSnooze(env, {
-      chatId,
-      dueAt,
-      reminderDate: parsed.reminderDate,
-      reminderTime: parsed.reminderTime,
-      message: query.message?.text ?? item?.message ?? "该完成这条提醒啦。",
-    });
-
-    await recordFeedback(env, {
-      chatId,
-      reminderDate: parsed.reminderDate,
-      reminderTime: parsed.reminderTime,
-      action: parsed.action,
-      messageId,
-    });
-
-    if (messageId) {
-      await editMessageReplyMarkup(env.TG_BOT_TOKEN, chatId, messageId);
-    }
-
-    await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, "10 分钟后阿尼亚再来。");
-    return new Response("OK");
+    return handleTestCallback(query, env, parsed, chatId, messageId);
   }
 
   await recordFeedback(env, {
-    chatId,
     reminderDate: parsed.reminderDate,
     reminderTime: parsed.reminderTime,
     action: parsed.action,
@@ -328,29 +398,13 @@ async function handleCallbackQuery(
 async function handleTestCallback(
   query: NonNullable<TelegramUpdate["callback_query"]>,
   env: Env,
-  ctx: ExecutionContext,
   parsed: NonNullable<ReturnType<typeof parseReminderCallbackData>>,
   chatId: number,
   messageId: number | undefined,
-  item: typeof timeline[number] | undefined,
 ): Promise<Response> {
   // Test callbacks exercise the button flow without touching feedback or stats.
   if (messageId) {
     await editMessageReplyMarkup(env.TG_BOT_TOKEN, chatId, messageId);
-  }
-
-  if (parsed.action === "snooze") {
-    const message = query.message?.text ?? item?.message ?? "该完成这条提醒啦。";
-    ctx.waitUntil(sendTestReminderAfterDelay(
-      env,
-      chatId,
-      message,
-      parsed.reminderDate,
-      parsed.reminderTime,
-      item,
-    ));
-    await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, "10 秒后阿尼亚再测试一次。");
-    return new Response("OK");
   }
 
   const text = parsed.action === "done"
@@ -358,50 +412,6 @@ async function handleTestCallback(
     : "测试跳过，不写入统计。";
   await answerCallbackQuery(env.TG_BOT_TOKEN, query.id, text);
   return new Response("OK");
-}
-
-async function sendTestReminderAfterDelay(
-  env: Env,
-  chatId: number,
-  message: string,
-  reminderDate: string,
-  reminderTime: string,
-  item: typeof timeline[number] | undefined,
-): Promise<void> {
-  await delay(TEST_SNOOZE_DELAY_MS);
-  await sendStickerForScene(env, chatId, getReminderScene(item, message));
-  await sendMessage(env.TG_BOT_TOKEN, chatId, `⏰ 阿尼亚测试重发：\n\n${message}`, {
-    parseMode: null,
-    replyMarkup: buildTestReminderKeyboard(reminderDate, reminderTime),
-  });
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function sendDueSnoozes(env: Env, now: Date): Promise<void> {
-  const snoozes = await getDueSnoozes(env, now);
-
-  await Promise.allSettled(
-    snoozes.map(async (snooze) => {
-      await sendStickerForScene(env, snooze.chatId, getReminderScene(undefined, snooze.message));
-
-      const ok = await sendMessage(
-        env.TG_BOT_TOKEN,
-        snooze.chatId,
-        `⏰ 阿尼亚又来提醒啦：\n\n${snooze.message}`,
-        {
-          parseMode: null,
-          replyMarkup: buildReminderKeyboard(snooze.reminderDate, snooze.reminderTime),
-        },
-      );
-
-      if (ok) {
-        await markSnoozeSent(env, snooze.id);
-      }
-    }),
-  );
 }
 
 async function handleStickerMessage(
