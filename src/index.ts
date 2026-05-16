@@ -8,16 +8,15 @@ import {
   setMyCommands,
 } from "./telegram";
 import { handleCommand } from "./commands";
-import { dailySchedule } from "./schedule";
+import { ensureReminderJobsForDate, isLocalMidnight } from "./jobs";
 import { sendStickerForScene } from "./stickers";
 import {
   claimReminderJob,
   getDueReminderJobs,
-  ensureReminderJobs,
-  hasReminderJobsForDate,
   getBotStatus,
   mapStickerToScene,
   markExpiredReminderJobs,
+  markMissedReminderJobsBefore,
   markReminderJobFailed,
   markReminderJobSent,
   recordFeedback,
@@ -26,16 +25,13 @@ import {
 import {
   buildReminderKeyboard,
   buildStickerSceneKeyboard,
-  formatReminderTime,
   getLocalDate,
-  getReminderScene,
   parseReminderCallbackData,
   parseStickerSceneCallbackData,
   STICKER_SCENES,
 } from "./interactions";
 
 const REMINDER_LOCK_MS = 2 * 60 * 1000;
-const REMINDER_JOB_EXPIRE_MS = 90 * 60 * 1000;
 const MESSAGE_SEND_ATTEMPTS = 3;
 const MESSAGE_RETRY_DELAY_MS = 500;
 
@@ -135,16 +131,12 @@ export default {
     const now = new Date();
     const scheduledAt = new Date(controller.scheduledTime);
     const reminderDate = getLocalDate(scheduledAt, env.TIMEZONE);
-    const shouldPrepareJobs = isLocalMidnight(scheduledAt, env.TIMEZONE)
-      || !(await hasReminderJobsForDate(env, reminderDate));
-
-    if (shouldPrepareJobs) {
-      await ensureReminderJobs(env, buildDailyReminderJobs(reminderDate, env.TIMEZONE));
-    }
-
-    await markExpiredReminderJobs(env, now);
-
     const enabledSince = status.updatedAt ? new Date(status.updatedAt) : now;
+
+    await ensureReminderJobsForDate(env, reminderDate, isLocalMidnight(scheduledAt, env.TIMEZONE));
+    await markExpiredReminderJobs(env, now);
+    await markMissedReminderJobsBefore(env, enabledSince, now);
+
     const dueJobs = await getDueReminderJobs(env, now, enabledSince);
     if (dueJobs.length === 0) return;
 
@@ -177,70 +169,6 @@ export default {
     }
   },
 };
-
-function buildDailyReminderJobs(reminderDate: string, timeZone: string) {
-  return dailySchedule.map((item) => {
-    const reminderTime = formatReminderTime(item);
-    const dueAt = localDateTimeToUtc(reminderDate, item.hour, item.minute, timeZone);
-
-    return {
-      id: `${reminderDate}:${reminderTime}`,
-      reminderDate,
-      reminderTime,
-      dueAt: dueAt.toISOString(),
-      expiresAt: new Date(dueAt.getTime() + REMINDER_JOB_EXPIRE_MS).toISOString(),
-      message: item.message,
-      scene: getReminderScene(item),
-    };
-  });
-}
-
-function isLocalMidnight(date: Date, timeZone: string): boolean {
-  const parts = getTimeZoneParts(date, timeZone);
-  return parts.hour === 0 && parts.minute === 0;
-}
-
-function localDateTimeToUtc(
-  localDate: string,
-  hour: number,
-  minute: number,
-  timeZone: string,
-): Date {
-  const [year, month, day] = localDate.split("-").map(Number);
-  const utcGuess = new Date(Date.UTC(year, month - 1, day, hour, minute));
-  const actual = getTimeZoneParts(utcGuess, timeZone);
-  const desiredUtc = Date.UTC(year, month - 1, day, hour, minute);
-  const actualUtc = Date.UTC(
-    actual.year,
-    actual.month - 1,
-    actual.day,
-    actual.hour,
-    actual.minute,
-  );
-
-  return new Date(utcGuess.getTime() - (actualUtc - desiredUtc));
-}
-
-function getTimeZoneParts(date: Date, timeZone: string) {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-
-  return {
-    year: Number(values.year),
-    month: Number(values.month),
-    day: Number(values.day),
-    hour: Number(values.hour),
-    minute: Number(values.minute),
-  };
-}
 
 function getTargetChatId(env: Env): number | null {
   const value = env.TG_CHAT_ID?.trim();

@@ -262,6 +262,24 @@ export async function markExpiredReminderJobs(env: Env, now: Date): Promise<void
   `).bind(isoNow, isoNow).run();
 }
 
+export async function markMissedReminderJobsBefore(
+  env: Env,
+  before: Date,
+  now: Date,
+): Promise<void> {
+  const isoNow = now.toISOString();
+  const isoBefore = before.toISOString();
+  await env.DB.prepare(`
+    UPDATE reminder_jobs
+    SET status = 'missed',
+        locked_until = NULL,
+        updated_at = ?
+    WHERE due_at < ?
+      AND due_at <= ?
+      AND status = 'pending'
+  `).bind(isoNow, isoBefore, isoNow).run();
+}
+
 export async function getReminderJobStatusesForDate(
   env: Env,
   reminderDate: string,

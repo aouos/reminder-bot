@@ -1,11 +1,14 @@
 import type { Env, TelegramMessage } from "./types";
 import { sendMessage } from "./telegram";
 import { dailySchedule } from "./schedule";
+import { ensureReminderJobsForDate } from "./jobs";
 import {
   getBotStatus,
   getReminderJobStatusesForDate,
   getReminderFeedbackForDate,
   getStickerSceneCounts,
+  markExpiredReminderJobs,
+  markMissedReminderJobsBefore,
   setBotEnabled,
 } from "./db";
 import {
@@ -128,6 +131,14 @@ async function handleList(chatId: number, env: Env): Promise<Response> {
     now.toLocaleString("en-US", { timeZone: env.TIMEZONE }),
   );
   const reminderDate = getLocalDate(now, env.TIMEZONE);
+  const state = await getBotStatus(env);
+
+  await ensureReminderJobsForDate(env, reminderDate);
+  await markExpiredReminderJobs(env, now);
+  if (state.enabled && state.updatedAt) {
+    await markMissedReminderJobsBefore(env, new Date(state.updatedAt), now);
+  }
+
   const [feedback, jobs] = await Promise.all([
     getReminderFeedbackForDate(env, reminderDate),
     getReminderJobStatusesForDate(env, reminderDate),
