@@ -139,7 +139,7 @@ export const dailySchedule: ScheduleItem[] = [
 
 消息支持 HTML 格式（`<b>`、`<i>`、`<code>` 等），使用 `\n` 换行。
 
-> **注意：** Cron 每 30 分钟执行一次（`*/30 * * * *`）。每天的提醒会写入 D1 的 `reminder_jobs` 队列；发送成功后标记为 `sent`，发送失败会在同一次执行内快速重试，仍失败则标记为 `failed`，超过 90 分钟未发送会标记为 `missed`。
+> **注意：** Cron 每 30 分钟执行一次（`*/30 * * * *`）。每天的提醒会写入 D1 的 `reminder_jobs` 队列；发送成功后标记为 `sent`，发送失败会在同一次执行内快速重试，仍失败则标记为 `failed`，超过 10 分钟未发送会标记为 `missed`。
 
 ### 配置贴纸
 

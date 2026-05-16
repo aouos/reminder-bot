@@ -3,7 +3,7 @@ import type { Env } from "./types";
 import { ensureReminderJobs, hasReminderJobsForDate } from "./db";
 import { formatReminderTime, getReminderScene } from "./interactions";
 
-const REMINDER_JOB_EXPIRE_MS = 90 * 60 * 1000;
+const REMINDER_JOB_EXPIRE_MS = 10 * 60 * 1000;
 
 export async function ensureReminderJobsForDate(
   env: Env,
