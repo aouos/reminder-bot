@@ -2,8 +2,8 @@ import type { ScheduleItem } from "./types";
 
 export const dailySchedule: ScheduleItem[] = [
   { hour: 7, minute: 30, message: "⏰ <b>起床啦！</b>\n\nbolt特工，不可以赖床刷手机！阿尼亚发现太阳光任务，快拉开窗帘，哇酷哇酷！✨" },
-  { hour: 8, minute: 0, message: "🚶 <b>晨间散步时间！</b>\n\nbolt特工，出门走 30 分钟，正常速度就好。早晨自然光任务开始！" },
-  { hour: 8, minute: 30, message: "🍳 <b>早餐时间！</b>\n\n父亲（Chichi），先好好吃饭。吃完做 5 分钟颈部拉伸，咖啡和茶记得 14:00 前喝完！" },
+  { hour: 8, minute: 0, message: "🍳 <b>早餐时间！</b>\n\n父亲（Chichi），先好好吃饭。吃完做 5 分钟颈部拉伸，咖啡和茶记得 14:00 前喝完！" },
+  { hour: 8, minute: 30, message: "🚶 <b>晨间散步时间！</b>\n\nbolt特工，出门走 30 分钟，正常速度就好。早晨自然光任务开始！" },
   { hour: 9, minute: 0, message: "📚 <b>开始工作学习！</b>\n\nbolt特工，任务开始。屏幕放到平视或略低一点，不要一直低头，脖子会发出大危机警报！" },
   { hour: 9, minute: 30, message: "🧘 <b>活动提醒</b>\n\nbolt特工，站起来走一走，转转脖子。记得看 6 米外 20 秒，眼睛也要休息！" },
   { hour: 10, minute: 0, message: "💧 <b>喝水提醒</b>\n\nbolt特工，生命之水补给时间！倒杯水喝掉，再看看窗外，让眼睛偷偷放假一下。" },
