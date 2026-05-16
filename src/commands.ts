@@ -145,15 +145,7 @@ async function handleList(chatId: number, env: Env): Promise<Response> {
   ]);
   const currentMinutes = currentTime.getHours() * 60 + currentTime.getMinutes();
 
-  const totalCount = dailySchedule.length;
-  const doneCount = [...feedback.values()].filter((action) => action === "done").length;
-  const skipCount = [...feedback.values()].filter((action) => action === "skip").length;
-
-  let msg = `📋 <b>今日提醒时间表</b>（完成 ${doneCount}/${totalCount}）\n`;
-  if (skipCount > 0) {
-    msg += `⏭️ 跳过 ${skipCount}\n`;
-  }
-  msg += "\n";
+  let msg = "📋 <b>今日提醒时间表</b>\n\n";
 
   for (const item of dailySchedule) {
     const itemMinutes = item.hour * 60 + item.minute;
@@ -163,8 +155,6 @@ async function handleList(chatId: number, env: Env): Promise<Response> {
     const title = item.message.split("\n")[0].replace(/<[^>]*>/g, "");
     msg += `${indicator} <code>${timeStr}</code>  ${title}\n`;
   }
-
-  msg += `\n🕐 当前时间: ${currentTime.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
 
   await sendMessage(env.TG_BOT_TOKEN, chatId, msg);
   return new Response("OK");
